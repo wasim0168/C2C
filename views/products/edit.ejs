@@ -1,0 +1,52 @@
+<%- include('../partials/header', { user }) %>
+
+<div class="row justify-content-center mt-4">
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-header">
+        <h4>Edit Product</h4>
+      </div>
+      <div class="card-body">
+        <form action="/products/<%= product.id %>/update" method="POST" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label for="title" class="form-label">Product Title</label>
+            <input type="text" class="form-control" id="title" name="title" value="<%= product.title %>" required>
+          </div>
+          <div class="mb-3">
+            <label for="description" class="form-label">Description</label>
+            <textarea class="form-control" id="description" name="description" rows="3" required><%= product.description %></textarea>
+          </div>
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label for="price" class="form-label">Price (₹)</label>
+              <input type="number" class="form-control" id="price" name="price" min="1" step="0.01" value="<%= product.price %>" required>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label for="category" class="form-label">Category</label>
+              <select class="form-select" id="category" name="category" required>
+                <% categories.forEach(category => { %>
+                  <option value="<%= category %>" <%= product.category === category ? 'selected' : '' %>><%= category %></option>
+                <% }) %>
+              </select>
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Current Image</label>
+            <div>
+              <img src="/uploads/<%= product.image %>" alt="Current Image" class="img-thumbnail" style="max-height: 200px;">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label for="image" class="form-label">Change Image (optional)</label>
+            <input type="file" class="form-control" id="image" name="image" accept="image/*">
+            <div class="form-text">Only JPEG, JPG, PNG images (max 5MB)</div>
+          </div>
+          <button type="submit" class="btn btn-primary">Update Product</button>
+          <a href="/profile" class="btn btn-secondary">Cancel</a>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<%- include('../partials/footer') %>

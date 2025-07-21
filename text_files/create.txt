@@ -1,0 +1,79 @@
+<%- include('../partials/header', { user }) %>
+
+<div class="container mt-4">
+  <div class="row justify-content-center">
+    <div class="col-md-8">
+      <div class="card">
+        <div class="card-header bg-primary text-white">
+          <h4>Add New Product</h4>
+        </div>
+        <div class="card-body">
+          <% if (message) { %>
+            <div class="alert alert-<%= message.type %>"><%= message.text %></div>
+          <% } %>
+          
+          <form action="/products/create" method="POST" enctype="multipart/form-data">
+            <div class="mb-3">
+              <label for="title" class="form-label">Product Name</label>
+              <input type="text" class="form-control" id="title" name="title" required>
+            </div>
+            
+            <div class="mb-3">
+              <label for="price" class="form-label">Price (₹)</label>
+              <input type="number" class="form-control" id="price" name="price" min="1" step="0.01" required>
+            </div>
+            
+            <div class="mb-3">
+              <label for="category" class="form-label">Category</label>
+              <select class="form-select" id="category" name="category" required>
+                <option value="">Select Category</option>
+                <% categories.forEach(category => { %>
+                  <option value="<%= category %>"><%= category %></option>
+                <% }) %>
+              </select>
+            </div>
+            
+            <div class="mb-3">
+              <label for="description" class="form-label">Description</label>
+              <textarea class="form-control" id="description" name="description" rows="4" required></textarea>
+            </div>
+            
+            <!-- <div class="mb-3">
+              <label for="image" class="form-label">Product Image</label>
+              <input type="file" class="form-control" id="image" name="image[]" accept="image/*" multiple required>
+              <div class="form-text">Max file size: 5MB (JPEG, PNG only)</div>
+            </div> -->
+
+             <div class="mb-3">
+              <label class="form-label">Product Images (Upload 2-3 images)</label>
+              
+              <div class="mb-2">
+                <label for="image1" class="form-label">Primary Image</label>
+                <input type="file" class="form-control" id="image1" name="images" accept="image/*" required>
+              </div>
+              
+              <div class="mb-2">
+                <label for="image2" class="form-label">Secondary Image</label>
+                <input type="file" class="form-control" id="image2" name="images" accept="image/*">
+              </div>
+              
+              <div class="mb-2">
+                <label for="image3" class="form-label">Additional Image (Optional)</label>
+                <input type="file" class="form-control" id="image3" name="images" accept="image/*">
+              </div>
+              
+              <div class="form-text">Max file size per image: 5MB (JPEG, PNG only)</div>
+            </div>
+            <!-- end -->
+            <div class="d-grid gap-2">
+              <button type="submit" class="btn btn-primary">Submit Product</button>
+              <a href="/profile" class="btn btn-outline-secondary">Cancel</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<%- include('../partials/footer') %>

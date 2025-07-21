@@ -1,0 +1,116 @@
+<%- include('../../partials/admin-header', { admin, activePage: 'feedback' }) %>
+
+<div class="container-fluid">
+  <div class="row">
+    <%- include('../../partials/admin-sidebar', { activePage: 'feedback' }) %>
+
+    <main class="col-md-9 ms-sm-auto px-md-4">
+      <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+        <h1 class="h2">Product Feedback</h1>
+        <div class="btn-toolbar mb-2 mb-md-0">
+          <div class="btn-group me-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary">Export</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-striped table-hover">
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Reviewer</th>
+              <th>Rating</th>
+              <th>Review</th>
+              <th>Status</th>
+              <th>Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% feedback.forEach(item => { %>
+              <tr>
+                <td>
+                  <a href="/products/<%= item.product_id %>" class="text-decoration-none">
+                    <%= item.product_title %>
+                  </a>
+                </td>
+                <td><%= item.reviewer_name %></td>
+                <td>
+                  <% for (let i = 1; i <= 5; i++) { %>
+                    <i class="bi <%= i <= item.rating ? 'bi-star-fill text-warning' : 'bi-star' %>"></i>
+                  <% } %>
+                </td>
+                <td><%= item.comment.substring(0, 50) %><%= item.comment.length > 50 ? '...' : '' %></td>
+                <td>
+                  <span class="badge <%= item.is_blocked ? 'bg-danger' : 'bg-success' %>">
+                    <%= item.is_blocked ? 'Blocked' : 'Visible' %>
+                  </span>
+                </td>
+                <td><%= new Date(item.created_at).toLocaleDateString() %></td>
+                <td>
+                  <div class="btn-group btn-group-sm">
+                    <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#feedbackModal<%= item.id %>">
+                      <i class="bi bi-eye"></i> View
+                    </button>
+                    <form action="/admin/feedback/<%= item.id %>/toggle-block" method="POST" class="d-inline">
+                      <button type="submit" class="btn <%= item.is_blocked ? 'btn-outline-success' : 'btn-outline-danger' %>">
+                        <i class="bi <%= item.is_blocked ? 'bi-check-circle' : 'bi-slash-circle' %>"></i>
+                        <%= item.is_blocked ? 'Unblock' : 'Block' %>
+                      </button>
+                    </form>
+                  </div>
+
+                  <!-- Feedback Detail Modal -->
+                  <div class="modal fade" id="feedbackModal<%= item.id %>" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog modal-lg">
+                      <div class="modal-content">
+                        <div class="modal-header">
+                          <h5 class="modal-title">Feedback Details</h5>
+                          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                          <div class="row mb-3">
+                            <div class="col-md-6">
+                              <h6>Product</h6>
+                              <p><%= item.product_title %></p>
+                              <p>Seller: <%= item.seller_name %></p>
+                            </div>
+                            <div class="col-md-6">
+                              <h6>Reviewer</h6>
+                              <p><%= item.reviewer_name %></p>
+                              <p>
+                                Rating: 
+                                <% for (let i = 1; i <= 5; i++) { %>
+                                  <i class="bi <%= i <= item.rating ? 'bi-star-fill text-warning' : 'bi-star' %>"></i>
+                                <% } %>
+                              </p>
+                            </div>
+                          </div>
+                          <hr>
+                          <h6>Review Comment</h6>
+                          <p><%= item.comment %></p>
+                        </div>
+                        <div class="modal-footer">
+                          <form action="/admin/feedback/<%= item.id %>/toggle-block" method="POST" class="d-inline">
+                            <button type="submit" class="btn <%= item.is_blocked ? 'btn-success' : 'btn-danger' %>">
+                              <i class="bi <%= item.is_blocked ? 'bi-check-circle' : 'bi-slash-circle' %>"></i>
+                              <%= item.is_blocked ? 'Unblock Review' : 'Block Review' %>
+                            </button>
+                          </form>
+                          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+</div>
+
+<%- include('../../partials/admin-footer') %>

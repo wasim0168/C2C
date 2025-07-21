@@ -1,0 +1,280 @@
+<%- include('partials/header', { user, message}) %>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha512-Evv84Mr4kqVGRNSgIGL/F/aIDqQb7xQ2vcrdIwxfjThSH8CSR7PBEakCr51Ck+w+/U6swU2Im1vVX0SVk9ABhg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<div class="container my-4">
+  <% if (message) { %>
+    <div class="alert alert-<%= message.type %> alert-dismissible fade show">
+      <%= message.text %>
+      <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+  <% } %>
+
+  <div class="row">
+    <div class="col-md-4 mb-4">
+      <div class="card">
+        <div class="card-header bg-warning text-white">
+          <h5 class="text-center fw-bold text-black"><i class="fa-solid fa-user fs-5"></i> My Profile</h5>
+        </div>
+        <div class="card-body">
+          <p ><strong><i class="fa-solid fa-file-signature p-1" style=" border-right: 2px solid green;" ></i> Name:</strong> <%= user.name %></p>
+          <p><strong><i class="fa-solid fa-envelope p-1" style=" border-right: 2px solid green;" ></i>  Email:</strong> <%= user.email %></p>
+          <% if (user.plan_id) { %>
+            <p><strong><i class="fa-solid fa-cloud-arrow-up p-1" style=" border-right: 2px solid green;"></i> Plan:</strong> <span id="current-plan"><%= plans.find(p => p.id === user.plan_id).name %></span></p>
+            <p><strong><img width="25" height="25" src="https://img.icons8.com/fluency/48/withdrawal-limit.png" alt="withdrawal-limit"/ style=" border-right: 2px solid green;" class="p-1"> Products Limit:</strong> <span id="product-limit"><%= user.product_limit %></span></p>
+            <p><strong><i class="fa-solid fa-signs-post p-1" style=" border-right: 2px solid green;"></i> Products Posted:</strong> <span id="posted-products"> <%= products.length %></span></p>
+            <% 
+              const progressWidth = user.product_limit > 0 
+                ? Math.min(100, (products.length/user.product_limit)*100) 
+                : 0;
+            %>
+            <div class="progress">
+              <div class="progress-bar" 
+                   role="progressbar" 
+                   style="width:progressWidth;"
+                   aria-valuenow="<%= progressWidth %>"
+                   aria-valuemin="0"
+                   aria-valuemax="100">
+              </div>
+            </div>
+            
+            <!-- Updated Messages Link with Unread Count -->
+            <a href="/messages" class="btn btn-outline-primary w-100 mt-2 position-relative">
+              <i class="bi bi-chat-text"></i> My Messages
+              <% if (unreadCount > 0) { %>
+                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
+                  <%= unreadCount %>
+                  <span class="visually-hidden">unread messages</span>
+                </span>
+              <% } %>
+            </a>
+            
+            <button class="btn btn-outline-primary w-100 mt-2" data-bs-toggle="modal" data-bs-target="#upgradePlanModal">
+              <i class="bi bi-arrow-up-circle"></i> Upgrade Plan
+            </button>
+          <% } else { %>
+            <div class="alert alert-warning">
+              You need to select a plan to start selling products.
+              <a href="/plans/select" class="alert-link">Choose a plan now</a>
+            </div>
+          <% } %>
+        </div>
+      </div>
+    </div>
+    
+    <div class="col-md-8">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5>My Products</h5>
+          <a href="/products/create" class="btn btn-primary btn-sm">Add Product</a>
+        </div>
+        <div class="card-body">
+          <% if (products.length === 0) { %>
+            <div class="alert alert-info">
+              You haven't posted any products yet.
+            </div>
+          <% } else { %>
+            <div class="row">
+              <% products.forEach(product => { %>
+                <div class="col-md-4 mb-4">
+                  <div class="card">
+                    <img src="/uploads/<%= product.image %>" class="card-img-top" alt="<%= product.title %>" style="height: 180px; object-fit: cover;">
+                    <div class="card-body">
+                      <h5 class="card-title"><%= product.title %></h5>
+                      <p class="card-text"><%= product.description.substring(0, 100) %>...</p>
+                      <p class="card-text"><strong>₹<%= product.price %></strong></p>
+                      <p class="card-text">
+                        <span class="badge bg-primary"><%= product.category %></span>
+                      </p>
+                    </div>
+                    <div class="card-footer bg-white">
+                      <a href="/products/<%= product.id %>/edit" class="btn btn-sm btn-outline-primary">Edit</a>
+                      <form action="/products/<%= product.id %>/delete" method="POST" class="d-inline">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure?')">Delete</button>
+                      </form>
+                    </div>
+                  </div>
+                </div>
+              <% }) %>
+            </div>
+          <% } %>
+
+          
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Upgrade Plan Modal -->
+<div class="modal fade" id="upgradePlanModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title">Upgrade Your Plan</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <% plans.forEach(plan => { %>
+            <div class="col-md-6 mb-4">
+              <div class="card plan-card h-100 <%= user.plan_id === plan.id ? 'border-primary' : '' %>">
+                <div class="card-header text-center py-3 <%= user.plan_id === plan.id ? 'bg-primary text-white' : '' %>">
+                  <h4 class="my-0 fw-normal"><%= plan.name %></h4>
+                </div>
+                <div class="card-body text-center">
+                  <h1 class="card-title pricing-card-title">₹<%= plan.price %></h1>
+                  <ul class="list-unstyled mt-3 mb-4">
+                    <li><i class="bi bi-check-circle-fill text-success"></i> Sell up to <%= plan.max_products %> products</li>
+                    <li><i class="bi bi-check-circle-fill text-success"></i> Unlimited duration</li>
+                    <li><i class="bi bi-check-circle-fill text-success"></i> Priority support</li>
+                  </ul>
+                  <button class="btn btn-lg <%= user.plan_id === plan.id ? 'btn-secondary' : 'btn-primary' %> select-plan" 
+                          data-plan-id="<%= plan.id %>"
+                          data-plan-name="<%= plan.name %>"
+                          data-max-products="<%= plan.max_products %>"
+                          <%= user.plan_id === plan.id ? 'disabled' : '' %>>
+                    <% if (user.plan_id === plan.id) { %>
+                      <i class="bi bi-check-circle"></i> Current Plan
+                    <% } else { %>
+                      <i class="bi bi-arrow-up-circle"></i> Upgrade Now
+                    <% } %>
+                  </button>
+                </div>
+              </div>
+            </div>
+          <% }) %>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Payment Success Toast -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+  <div id="paymentToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+    <div class="toast-header bg-success text-white">
+      <strong class="me-auto">Payment Success</strong>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="toast"></button>
+    </div>
+    <div class="toast-body bg-light">
+      <span id="toastMessage"></span>
+    </div>
+  </div>
+</div>
+
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Initialize Bootstrap toast
+  const paymentToast = new bootstrap.Toast(document.getElementById('paymentToast'));
+  
+  // Handle plan selection with Razorpay
+  document.querySelectorAll('.select-plan').forEach(button => {
+    button.addEventListener('click', async function() {
+      const planId = this.getAttribute('data-plan-id');
+      const planName = this.getAttribute('data-plan-name');
+      const maxProducts = this.getAttribute('data-max-products');
+      
+      // Show loading state
+      const originalText = this.innerHTML;
+      this.innerHTML = '<span class="spinner-border spinner-border-sm" role="status"></span> Processing...';
+      this.disabled = true;
+      
+      try {
+        // Create Razorpay order
+        const response = await fetch('/create-razorpay-order', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ plan_id: planId })
+        });
+        
+        const order = await response.json();
+        
+        if (order.error) {
+          throw new Error(order.error);
+        }
+        
+        // Razorpay options
+        const options = {
+          key: '<%= process.env.RAZORPAY_KEY_ID %>',
+          amount: order.amount,
+          currency: order.currency,
+          name: 'OLX Clone',
+          description: `Upgrade to ${planName} Plan`,
+          image: '/logo.png',
+          order_id: order.id,
+          handler: async function(response) {
+            try {
+              const verification = await fetch('/verify-payment', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  razorpay_payment_id: response.razorpay_payment_id,
+                  razorpay_order_id: response.razorpay_order_id,
+                  razorpay_signature: response.razorpay_signature,
+                  plan_id: planId
+                })
+              });
+              
+              const result = await verification.json();
+              
+              if (result.success) {
+                // Update UI
+                document.getElementById('current-plan').textContent = planName;
+                document.getElementById('product-limit').textContent = maxProducts;
+                
+                // Close modal
+                const modal = bootstrap.Modal.getInstance(document.getElementById('upgradePlanModal'));
+                modal.hide();
+                
+                // Show success toast
+                document.getElementById('toastMessage').textContent = 
+                  `Successfully upgraded to ${planName} plan! You can now post up to ${maxProducts} products.`;
+                paymentToast.show();
+                
+                // Refresh products count
+                setTimeout(() => {
+                  window.location.reload();
+                }, 3000);
+              } else {
+                alert('Payment verification failed: ' + (result.message || 'Unknown error'));
+              }
+            } catch (error) {
+              console.error('Verification error:', error);
+              alert('Error verifying payment: ' + error.message);
+            }
+          },
+          prefill: {
+            name: '<%= user.name %>',
+            email: '<%= user.email %>',
+          },
+          theme: {
+            color: '#0d6efd'
+          },
+          modal: {
+            ondismiss: function() {
+              console.log('Payment modal closed');
+            }
+          }
+        };
+        
+        const rzp = new Razorpay(options);
+        rzp.open();
+        
+      } catch (error) {
+        console.error('Error:', error);
+        alert('Error: ' + error.message);
+      } finally {
+        // Reset button state
+        this.innerHTML = originalText;
+        this.disabled = false;
+      }
+    });
+  });
+});
+</script>
+
+<%- include('partials/footer') %>

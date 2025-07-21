@@ -1,0 +1,233 @@
+<%- include('../partials/header', { user }) %>
+
+<div class="container my-4">
+  <div class="row">
+    <div class="col-md-3">
+      <div class="card">
+        <div class="card-header bg-primary text-white">
+          <h5><i class="bi bi-inbox"></i> Messages</h5>
+        </div>
+        <div class="list-group list-group-flush">
+          <a href="/messages" class="list-group-item list-group-item-action">
+            <i class="bi bi-inbox-fill"></i> Inbox
+          </a>
+        </div>
+      </div>
+    </div>
+    
+    <div class="col-md-9">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <div>
+            <h5 class="mb-0"><%= product.title %></h5>
+            <small class="text-muted">Chat with <%= otherUser.name %></small>
+          </div>
+          <div>
+            <span class="badge bg-primary">₹<%= product.price %></span>
+          </div>
+        </div>
+        
+        <div class="card-body p-0">
+          <div class="chat-container" style="height: 500px;">
+            <!-- Chat header with product info -->
+            <div class="chat-header p-3 border-bottom d-flex align-items-center">
+              <img src="/uploads/<%= product.image %>" 
+                   class="chat-product-img rounded me-3" 
+                   style="width: 50px; height: 50px; object-fit: cover;">
+              <div>
+                <h6 class="mb-0"><%= product.title %></h6>
+                <small class="text-muted">₹<%= product.price %></small>
+              </div>
+            </div>
+            
+            <!-- Messages container -->
+            <div class="chat-messages p-3" id="chatMessages">
+              <% messages.forEach(msg => { %>
+                <div class="message <%= msg.sender_id === user.id ? 'sent' : 'received' %>">
+                  <div class="message-content">
+                    <% if (msg.sender_id !== user.id) { %>
+                      <div class="sender-name"><%= msg.sender_name %></div>
+                    <% } %>
+                    <div class="message-text"><%= msg.message %></div>
+                    <div class="message-time">
+                      <%= new Date(msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) %>
+                    </div>
+                  </div>
+                </div>
+              <% }) %>
+            </div>
+            
+            <!-- Message input -->
+            <div class="chat-input p-3 border-top">
+              <form id="chatForm" class="d-flex">
+                <input type="hidden" id="productId" value="<%= product.id %>">
+                <input type="hidden" id="receiverId" value="<%= otherUser.id %>">
+                <input type="text" id="messageInput" class="form-control me-2" placeholder="Type your message..." required>
+                <button type="submit" onclick="refresh()" class="btn btn-primary">
+                  <i class="bi bi-send-fill"></i>
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  const currentUserId = '<%= user.id %>';
+  const productId = '<%= product.id %>';
+  const otherUserId = '<%= otherUser.id %>';
+  
+  // Register user with their ID
+  socket.emit('register', currentUserId);
+  
+  // Mark messages as read when conversation opens
+  fetch('/messages/mark-as-read', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      productId: productId,
+      senderId: otherUserId
+    })
+  });
+  
+  // Handle new messages
+  socket.on('newMessage', (message) => {
+    if ((message.productId == productId) && 
+        ((message.senderId == otherUserId && message.receiverId == currentUserId) || 
+         (message.senderId == currentUserId && message.receiverId == otherUserId))) {
+      appendMessage(message);
+      scrollToBottom();
+      
+      // If message is from other user, mark as read
+      if (message.senderId == otherUserId) {
+        fetch('/messages/mark-as-read', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            productId: productId,
+            senderId: otherUserId
+          })
+        });
+      }
+    }
+  });
+  
+  // Send message
+  document.getElementById('chatForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const messageInput = document.getElementById('messageInput');
+    
+    if (messageInput.value.trim()) {
+      socket.emit('sendMessage', {
+        senderId: currentUserId,
+        receiverId: otherUserId,
+        productId: productId,
+        message: messageInput.value.trim()
+      });
+      
+      messageInput.value = '';
+    }
+  });
+  
+  function appendMessage(msg) {
+    const chatMessages = document.getElementById('chatMessages');
+    const isCurrentUser = msg.senderId == currentUserId;
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${isCurrentUser ? 'sent' : 'received'}`;
+    
+    messageDiv.innerHTML = `
+      <div class="message-content">
+        ${!isCurrentUser ? `<div class="sender-name">${msg.sender_name}</div>` : ''}
+        <div class="message-text">${msg.message}</div>
+        <div class="message-time">${new Date(msg.timestamp || msg.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+      </div>
+    `;
+    
+    chatMessages.appendChild(messageDiv);
+    scrollToBottom();
+  }
+  
+  function scrollToBottom() {
+    const chatMessages = document.getElementById('chatMessages');
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+  
+  // Initial scroll to bottom
+  scrollToBottom();
+
+  const refresh = () =>{
+    window.reload()
+  }
+</script>
+
+<style>
+  .chat-container {
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    background-color: #f8f9fa;
+  }
+  
+  .chat-product-img {
+    width: 50px;
+    height: 50px;
+    object-fit: cover;
+  }
+  
+  .message {
+    margin-bottom: 15px;
+    max-width: 80%;
+  }
+  
+  .message.sent {
+    margin-left: auto;
+  }
+  
+  .message.sent .message-content {
+    background-color: #007bff;
+    color: white;
+    border-radius: 18px 18px 0 18px;
+    padding: 8px 12px;
+  }
+  
+  .message.received .message-content {
+    background-color: white;
+    border: 1px solid #dee2e6;
+    border-radius: 18px 18px 18px 0;
+    padding: 8px 12px;
+  }
+  
+  .sender-name {
+    font-weight: bold;
+    font-size: 0.8rem;
+    margin-bottom: 2px;
+  }
+  
+  .message-text {
+    word-wrap: break-word;
+  }
+  
+  .message-time {
+    font-size: 0.7rem;
+    text-align: right;
+    opacity: 0.7;
+    margin-top: 3px;
+  }
+</style>
+
+<%- include('../partials/footer') %>

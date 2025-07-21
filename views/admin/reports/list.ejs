@@ -1,0 +1,125 @@
+<%- include('../../partials/admin-header', { admin, activePage: 'reports' }) %>
+
+<div class="container-fluid">
+  <div class="row">
+    <%- include('../../partials/admin-sidebar', { activePage: 'reports' }) %>
+
+    <main class="col-md-9 ms-sm-auto px-md-4">
+      <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+        <h1 class="h2">Reported Items</h1>
+        <div class="btn-toolbar mb-2 mb-md-0">
+          <div class="btn-group me-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary">Export</button>
+          </div>
+        </div>
+      </div>
+
+      <% if (product) { %>
+        <div class="alert alert-info mb-4">
+          <h5>Product: <%= product.title %></h5>
+          <p class="mb-0">Showing reports for this product only</p>
+        </div>
+      <% } %>
+
+      <div class="table-responsive">
+        <table class="table table-striped table-hover">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Product</th>
+              <th>Reporter</th>
+              <th>Reason</th>
+              <th>Status</th>
+              <th>Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% reports.forEach(report => { %>
+              <tr>
+                <td><%= report.id %></td>
+                <td>
+                  <a href="/products/<%= report.product_id %>" class="text-decoration-none">
+                    <%= report.product_title %>
+                  </a>
+                </td>
+                <td><%= report.reporter_name %></td>
+                <td><%= report.reason.substring(0, 50) %><%= report.reason.length > 50 ? '...' : '' %></td>
+                <td>
+                  <span class="badge <%= report.status === 'pending' ? 'bg-warning text-dark' : report.status === 'resolved' ? 'bg-success' : 'bg-danger' %>">
+                    <%= report.status.charAt(0).toUpperCase() + report.status.slice(1) %>
+                  </span>
+                </td>
+                <td><%= new Date(report.created_at).toLocaleDateString() %></td>
+                <td>
+                  <div class="btn-group btn-group-sm">
+                    <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#reportModal<%= report.id %>">
+                      <i class="bi bi-eye"></i> View
+                    </button>
+                    <form action="/admin/reports/<%= report.id %>/resolve" method="POST" class="d-inline">
+                      <input type="hidden" name="action" value="resolved">
+                      <button type="submit" class="btn btn-outline-success">
+                        <i class="bi bi-check-circle"></i> Resolve
+                      </button>
+                    </form>
+                  </div>
+
+                  <!-- Report Detail Modal -->
+                  <div class="modal fade" id="reportModal<%= report.id %>" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog modal-lg">
+                      <div class="modal-content">
+                        <div class="modal-header">
+                          <h5 class="modal-title">Report Details</h5>
+                          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                          <div class="row">
+                            <div class="col-md-6">
+                              <h6>Report Information</h6>
+                              <p><strong>ID:</strong> <%= report.id %></p>
+                              <p><strong>Status:</strong> 
+                                <span class="badge <%= report.status === 'pending' ? 'bg-warning text-dark' : report.status === 'resolved' ? 'bg-success' : 'bg-danger' %>">
+                                  <%= report.status.charAt(0).toUpperCase() + report.status.slice(1) %>
+                                </span>
+                              </p>
+                              <p><strong>Date:</strong> <%= new Date(report.created_at).toLocaleString() %></p>
+                            </div>
+                            <div class="col-md-6">
+                              <h6>Product Information</h6>
+                              <p><strong>Product:</strong> <%= report.product_title %></p>
+                              <p><strong>Seller:</strong> <%= report.seller_name %></p>
+                            </div>
+                          </div>
+                          <hr>
+                          <h6>Report Reason</h6>
+                          <p><%= report.reason %></p>
+                          
+                          <% if (report.admin_notes) { %>
+                            <hr>
+                            <h6>Admin Notes</h6>
+                            <p><%= report.admin_notes %></p>
+                          <% } %>
+                        </div>
+                        <div class="modal-footer">
+                          <form action="/admin/reports/<%= report.id %>/resolve" method="POST" class="d-inline">
+                            <input type="hidden" name="action" value="resolved">
+                            <button type="submit" class="btn btn-success">
+                              <i class="bi bi-check-circle"></i> Mark as Resolved
+                            </button>
+                          </form>
+                          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+</div>
+
+<%- include('../../partials/admin-footer') %>

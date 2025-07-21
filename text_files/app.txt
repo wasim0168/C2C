@@ -1,0 +1,1003 @@
+require('dotenv').config();
+const express = require('express');
+const session = require('express-session');
+const mysql = require('mysql2/promise');
+const bcrypt = require('bcrypt');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const Razorpay = require('razorpay');
+const crypto = require('crypto');
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Initialize Razorpay
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
+// Database connection
+const db = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'olx_clone',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
+
+// Middleware
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: false }
+}));
+
+// Static files
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Set view engine
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'ejs');
+
+// File upload configuration
+const upload = multer({ 
+  dest: 'public/uploads/',
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
+
+// Authentication middleware
+const isAuthenticated = (req, res, next) => {
+  if (req.session.user) {
+    next();
+  } else {
+    req.session.returnTo = req.originalUrl;
+    res.redirect('/auth/login');
+  }
+};
+
+// Admin middleware
+const isAdmin = (req, res, next) => {
+  if (req.session.user?.is_admin) {
+    next();
+  } else {
+    res.status(403).render('error', {
+      user: req.session.user,
+      status: 403,
+      message: 'Access denied',
+      showSearch: false
+    });
+  }
+};
+
+// Product ID validation middleware (updated)
+const validateProductId = (req, res, next) => {
+  const productId = req.params.id;
+  
+  if (!productId || !/^\d+$/.test(productId)) {
+    return res.status(400).render('error', {
+      user: req.session.user,
+      status: 400,
+      message: 'Invalid product ID format',
+      showSearch: true
+    });
+  }
+  
+  req.productId = parseInt(productId, 10);
+  next();
+};
+
+// Product ownership validation middleware
+const validateProductOwner = async (req, res, next) => {
+  try {
+    const [products] = await db.query(
+      'SELECT * FROM products WHERE id = ? AND user_id = ?',
+      [req.productId, req.session.user?.id]
+    );
+    
+    if (products.length === 0) {
+      return res.status(404).render('error', {
+        user: req.session.user,
+        status: 404,
+        message: 'Product not found or you don\'t have permission',
+        showSearch: true
+      });
+    }
+    
+    req.product = products[0];
+    next();
+  } catch (error) {
+    console.error('Product validation error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Server error during product validation'
+    });
+  }
+};
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(`ERROR (${err.statusCode || 500}): ${err.message}`);
+  
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Something went wrong!';
+  
+  res.status(statusCode).render('error', {
+    title: `Error ${statusCode}`,
+    status: statusCode,
+    message: message,
+    user: req.session.user || null,
+    showSearch: statusCode === 404
+  });
+});
+
+// Routes
+
+// Home page
+app.get('/', async (req, res) => {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name 
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.is_active = TRUE
+      ORDER BY p.created_at DESC
+      LIMIT 20
+    `);
+    
+    res.render('home', { 
+      user: req.session.user || null,
+      products: products || [],
+      searchQuery: null,
+      selectedCategory: null,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      message: null
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Search products
+app.get('/search', async (req, res) => {
+  const { q, category } = req.query;
+  let query = `
+    SELECT p.*, u.name as user_name 
+    FROM products p
+    JOIN users u ON p.user_id = u.id
+    WHERE p.is_active = TRUE
+  `;
+  const params = [];
+
+  if (q) {
+    query += ' AND (p.title LIKE ? OR p.description LIKE ?)';
+    params.push(`%${q}%`, `%${q}%`);
+  }
+
+  if (category) {
+    query += ' AND p.category = ?';
+    params.push(category);
+  }
+
+  query += ' ORDER BY p.created_at DESC';
+
+  try {
+    const [products] = await db.query(query, params);
+    res.render('home', { 
+      user: req.session.user || null,
+      products,
+      searchQuery: q,
+      selectedCategory: category,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      message: null
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Product Creation Routes (should come before ID routes)
+app.get('/products/create', isAuthenticated, async (req, res) => {
+  try {
+    if (!req.session.user.plan_id) {
+      req.session.message = {
+        type: 'warning',
+        text: 'Please select a plan before posting products'
+      };
+      return res.redirect('/plans/select');
+    }
+
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    if (count[0].count >= req.session.user.product_limit) {
+      req.session.message = {
+        type: 'danger',
+        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
+      };
+      return res.redirect('/profile');
+    }
+
+    res.render('products/create', {
+      user: req.session.user,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      message: req.session.message || null
+    });
+
+    delete req.session.message;
+  } catch (error) {
+    console.error('Product create page error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Error loading product creation page'
+    });
+  }
+});
+
+app.post('/products/create', isAuthenticated, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.session.user.plan_id) {
+      req.session.message = { type: 'danger', text: 'Please select a plan before posting products' };
+      return res.redirect('/plans/select');
+    }
+
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    if (count[0].count >= req.session.user.product_limit) {
+      req.session.message = { 
+        type: 'warning', 
+        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
+      };
+      return res.redirect('/profile');
+    }
+
+    const { title, description, price, category } = req.body;
+    if (!title || !description || !price || !category || !req.file) {
+      req.session.message = { type: 'danger', text: 'All fields are required' };
+      return res.redirect('/products/create');
+    }
+
+    const [result] = await db.query(
+      'INSERT INTO products (user_id, title, description, price, image, category) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.session.user.id, title, description, parseFloat(price), req.file.filename, category]
+    );
+    
+    req.session.message = { type: 'success', text: 'Product posted successfully!' };
+    return res.redirect('/profile');
+    
+  } catch (error) {
+    console.error('Product creation error:', error);
+    req.session.message = { type: 'danger', text: 'Error creating product. Please try again.' };
+    return res.redirect('/products/create');
+  }
+});
+
+// Product ID Routes (with validation)
+app.get('/products/:id', validateProductId, async (req, res) => {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name, u.email as user_email
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.id = ? AND p.is_active = TRUE
+    `, [req.productId]);
+
+    if (products.length === 0) {
+      return res.status(404).render('error', {
+        user: req.session.user,
+        status: 404,
+        message: 'Product not found or has been removed',
+        showSearch: true
+      });
+    }
+
+    res.render('products/show', { 
+      user: req.session.user,
+      product: products[0],
+      similarProducts: await getSimilarProducts(products[0].category, products[0].id)
+    });
+  } catch (error) {
+    console.error('Product view error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Server error while loading product'
+    });
+  }
+});
+
+app.get('/products/:id/edit', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  async (req, res) => {
+    res.render('products/edit', { 
+      user: req.session.user,
+      product: req.product,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others']
+    });
+  }
+);
+
+app.post('/products/:id/update', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  upload.single('image'), 
+  async (req, res) => {
+    const { title, description, price, category } = req.body;
+    
+    try {
+      const updateData = {
+        title,
+        description,
+        price: parseFloat(price),
+        category
+      };
+      
+      if (req.file) {
+        const oldImage = path.join(__dirname, 'public', 'uploads', req.product.image);
+        if (fs.existsSync(oldImage)) {
+          fs.unlinkSync(oldImage);
+        }
+        updateData.image = req.file.filename;
+      }
+      
+      await db.query(
+        'UPDATE products SET ? WHERE id = ?',
+        [updateData, req.productId]
+      );
+      
+      req.session.message = {
+        type: 'success',
+        text: 'Product updated successfully'
+      };
+      res.redirect('/profile');
+    } catch (error) {
+      console.error(error);
+      req.session.message = {
+        type: 'danger',
+        text: 'Error updating product'
+      };
+      res.redirect(`/products/${req.productId}/edit`);
+    }
+  }
+);
+
+app.post('/products/:id/delete', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  async (req, res) => {
+    try {
+      const imagePath = path.join(__dirname, 'public', 'uploads', req.product.image);
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+      
+      await db.query('DELETE FROM products WHERE id = ?', [req.productId]);
+      
+      req.session.message = {
+        type: 'success',
+        text: 'Product deleted successfully'
+      };
+      res.redirect('/profile');
+    } catch (error) {
+      console.error(error);
+      req.session.message = {
+        type: 'danger',
+        text: 'Error deleting product'
+      };
+      res.redirect('/profile');
+    }
+  }
+);
+
+// Helper function to get similar products
+async function getSimilarProducts(category, excludeId) {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name 
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.category = ? AND p.id != ? AND p.is_active = TRUE
+      ORDER BY p.created_at DESC
+      LIMIT 4
+    `, [category, excludeId]);
+    return products;
+  } catch (error) {
+    console.error('Error fetching similar products:', error);
+    return [];
+  }
+}
+
+// Auth Routes
+
+// Login page
+app.get('/auth/login', (req, res) => {
+  if (req.session.user) {
+    return res.redirect('/');
+  }
+  res.render('auth/login', { error: null });
+});
+
+// Login handler
+app.post('/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      return res.render('auth/login', { error: 'Invalid email or password' });
+    }
+
+    const user = users[0];
+    const match = await bcrypt.compare(password, user.password);
+
+    if (!match) {
+      return res.render('auth/login', { error: 'Invalid email or password' });
+    }
+
+    req.session.user = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      plan_id: user.plan_id,
+      product_limit: user.product_limit,
+      is_admin: user.is_admin
+    };
+
+    const redirectTo = req.session.returnTo || '/';
+    delete req.session.returnTo;
+    res.redirect(redirectTo);
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Register page
+app.get('/auth/register', (req, res) => {
+  if (req.session.user) {
+    return res.redirect('/');
+  }
+  res.render('auth/register', { error: null });
+});
+
+// Register handler
+app.post('/auth/register', async (req, res) => {
+  const { name, email, password, confirm_password } = req.body;
+
+  if (password !== confirm_password) {
+    return res.render('auth/register', { error: 'Passwords do not match' });
+  }
+
+  try {
+    const [existingUsers] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+    
+    if (existingUsers.length > 0) {
+      return res.render('auth/register', { error: 'Email already registered' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    await db.query(
+      'INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
+      [name, email, hashedPassword]
+    );
+
+    res.redirect('/auth/login');
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Logout
+app.get('/auth/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/');
+});
+
+// User Profile
+app.get('/profile', isAuthenticated, async (req, res) => {
+  try {
+    const [products] = await db.query(
+      'SELECT * FROM products WHERE user_id = ? ORDER BY created_at DESC',
+      [req.session.user.id]
+    );
+    
+    const [plans] = await db.query('SELECT * FROM plans');
+    
+    const message = req.session.message;
+    delete req.session.message;
+    
+    res.render('profile', { 
+      user: req.session.user,
+      products,
+      plans,
+      message: message || null
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Plan Selection
+app.get('/plans/select', isAuthenticated, (req, res) => {
+  if (req.session.user.plan_id) {
+    return res.redirect('/profile');
+  }
+  
+  db.query('SELECT * FROM plans')
+    .then(([plans]) => {
+      res.render('plans/select', { plans, user: req.session.user });
+    })
+    .catch(error => {
+      console.error(error);
+      res.status(500).send('Server error');
+    });
+});
+
+// Razorpay Integration
+
+// Create Razorpay order
+app.post('/create-razorpay-order', isAuthenticated, async (req, res) => {
+  const { plan_id } = req.body;
+
+  try {
+    const [plans] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    if (plans.length === 0) {
+      return res.status(400).json({ error: 'Invalid plan selected' });
+    }
+
+    const plan = plans[0];
+    const amount = plan.price * 100;
+
+    const options = {
+      amount: amount.toString(),
+      currency: 'INR',
+      receipt: `plan_${plan.id}_user_${req.session.user.id}_${Date.now()}`,
+      payment_capture: 1,
+      notes: {
+        plan_id: plan.id,
+        user_id: req.session.user.id
+      }
+    };
+
+    razorpay.orders.create(options, (err, order) => {
+      if (err) {
+        console.error('Razorpay create order error:', err);
+        return res.status(500).json({ error: err.error.description });
+      }
+      
+      res.json({
+        id: order.id,
+        currency: order.currency,
+        amount: order.amount,
+        plan_id: plan.id
+      });
+    });
+    
+  } catch (error) {
+    console.error('Server error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Verify payment and update plan
+app.post('/verify-payment', isAuthenticated, async (req, res) => {
+  try {
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, plan_id } = req.body;
+
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature || !plan_id) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing payment verification fields' 
+      });
+    }
+
+    const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
+    hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
+    const generated_signature = hmac.digest('hex');
+
+    if (generated_signature !== razorpay_signature) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Payment verification failed - invalid signature' 
+      });
+    }
+
+    const [plans] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    if (plans.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid plan selected' 
+      });
+    }
+
+    const plan = plans[0];
+    
+    await db.query(
+      'UPDATE users SET plan_id = ?, product_limit = ? WHERE id = ?',
+      [plan.id, plan.max_products, req.session.user.id]
+    );
+
+    await db.query(
+      'INSERT INTO payments (user_id, plan_id, amount, razorpay_payment_id, razorpay_order_id) VALUES (?, ?, ?, ?, ?)',
+      [req.session.user.id, plan.id, plan.price, razorpay_payment_id, razorpay_order_id]
+    );
+
+    req.session.user.plan_id = plan.id;
+    req.session.user.product_limit = plan.max_products;
+
+    return res.json({ 
+      success: true,
+      plan_name: plan.name,
+      product_limit: plan.max_products,
+      redirectUrl: '/profile'
+    });
+
+  } catch (error) {
+    console.error('Payment verification error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error during payment verification'
+    });
+  }
+});
+
+// Product Management
+
+// Create product page
+// Remove product ID validation from create routes
+app.get('/products/create', isAuthenticated, async (req, res) => {
+  try {
+    if (!req.session.user.plan_id) {
+      req.session.message = {
+        type: 'warning',
+        text: 'Please select a plan before posting products'
+      };
+      return res.redirect('/plans/select');
+    }
+
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    if (count[0].count >= req.session.user.product_limit) {
+      req.session.message = {
+        type: 'danger',
+        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
+      };
+      return res.redirect('/profile');
+    }
+
+    res.render('products/create', {
+      user: req.session.user,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      message: req.session.message || null
+    });
+
+    delete req.session.message;
+  } catch (error) {
+    console.error('Product create page error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Error loading product creation page'
+    });
+  }
+});
+
+app.post('/products/create', isAuthenticated, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.session.user.plan_id) {
+      req.session.message = { type: 'danger', text: 'Please select a plan before posting products' };
+      return res.redirect('/plans/select');
+    }
+
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    if (count[0].count >= req.session.user.product_limit) {
+      req.session.message = { 
+        type: 'warning', 
+        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
+      };
+      return res.redirect('/profile');
+    }
+
+    const { title, description, price, category } = req.body;
+    if (!title || !description || !price || !category || !req.file) {
+      req.session.message = { type: 'danger', text: 'All fields are required' };
+      return res.redirect('/products/create');
+    }
+
+    const [result] = await db.query(
+      'INSERT INTO products (user_id, title, description, price, image, category) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.session.user.id, title, description, parseFloat(price), req.file.filename, category]
+    );
+    
+    req.session.message = { type: 'success', text: 'Product posted successfully!' };
+    return res.redirect('/profile');
+    
+  } catch (error) {
+    console.error('Product creation error:', error);
+    req.session.message = { type: 'danger', text: 'Error creating product. Please try again.' };
+    return res.redirect('/products/create');
+  }
+});
+
+// Create product handler
+app.post('/products/create', isAuthenticated, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.session.user.plan_id) {
+      req.session.message = { type: 'danger', text: 'Please select a plan before posting products' };
+      return res.redirect('/plans/select');
+    }
+
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    if (count[0].count >= req.session.user.product_limit) {
+      req.session.message = { 
+        type: 'warning', 
+        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
+      };
+      return res.redirect('/profile');
+    }
+
+    const { title, description, price, category } = req.body;
+    if (!title || !description || !price || !category || !req.file) {
+      req.session.message = { type: 'danger', text: 'All fields are required' };
+      return res.redirect('/products/create');
+    }
+
+    const [result] = await db.query(
+      'INSERT INTO products (user_id, title, description, price, image, category) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.session.user.id, title, description, parseFloat(price), req.file.filename, category]
+    );
+    
+    req.session.message = { type: 'success', text: 'Product posted successfully!' };
+    return res.redirect('/profile');
+    
+  } catch (error) {
+    console.error('Product creation error:', error);
+    req.session.message = { type: 'danger', text: 'Error creating product. Please try again.' };
+    return res.redirect('/products/create');
+  }
+});
+
+// Edit product page
+app.get('/products/:id/edit', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  async (req, res) => {
+    res.render('products/edit', { 
+      user: req.session.user,
+      product: req.product,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others']
+    });
+  }
+);
+
+// Update product handler
+app.post('/products/:id/update', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  upload.single('image'), 
+  async (req, res) => {
+    const { title, description, price, category } = req.body;
+    
+    try {
+      const updateData = {
+        title,
+        description,
+        price: parseFloat(price),
+        category
+      };
+      
+      if (req.file) {
+        const oldImage = path.join(__dirname, 'public', 'uploads', req.product.image);
+        if (fs.existsSync(oldImage)) {
+          fs.unlinkSync(oldImage);
+        }
+        updateData.image = req.file.filename;
+      }
+      
+      await db.query(
+        'UPDATE products SET ? WHERE id = ?',
+        [updateData, req.productId]
+      );
+      
+      req.session.message = {
+        type: 'success',
+        text: 'Product updated successfully'
+      };
+      res.redirect('/profile');
+    } catch (error) {
+      console.error(error);
+      req.session.message = {
+        type: 'danger',
+        text: 'Error updating product'
+      };
+      res.redirect(`/products/${req.productId}/edit`);
+    }
+  }
+);
+
+// Delete product
+app.post('/products/:id/delete', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  async (req, res) => {
+    try {
+      const imagePath = path.join(__dirname, 'public', 'uploads', req.product.image);
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+      
+      await db.query('DELETE FROM products WHERE id = ?', [req.productId]);
+      
+      req.session.message = {
+        type: 'success',
+        text: 'Product deleted successfully'
+      };
+      res.redirect('/profile');
+    } catch (error) {
+      console.error(error);
+      req.session.message = {
+        type: 'danger',
+        text: 'Error deleting product'
+      };
+      res.redirect('/profile');
+    }
+  }
+);
+
+// Admin Routes
+
+// Admin dashboard
+app.get('/admin/dashboard', isAdmin, async (req, res) => {
+  try {
+    const [[usersCount]] = await db.query('SELECT COUNT(*) as count FROM users WHERE is_admin = FALSE');
+    const [[productsCount]] = await db.query('SELECT COUNT(*) as count FROM products');
+    const [[activeProductsCount]] = await db.query('SELECT COUNT(*) as count FROM products WHERE is_active = TRUE');
+    
+    res.render('admin/dashboard', {
+      user: req.session.user,
+      usersCount: usersCount.count,
+      productsCount: productsCount.count,
+      activeProductsCount: activeProductsCount.count
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Admin - List users
+app.get('/admin/users', isAdmin, async (req, res) => {
+  try {
+    const [users] = await db.query(`
+      SELECT u.*, p.name as plan_name 
+      FROM users u
+      LEFT JOIN plans p ON u.plan_id = p.id
+      WHERE u.is_admin = FALSE
+      ORDER BY u.created_at DESC
+    `);
+    
+    res.render('admin/users', {
+      user: req.session.user,
+      users
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Admin - List products
+app.get('/admin/products', isAdmin, async (req, res) => {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name, u.email as user_email
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      ORDER BY p.created_at DESC
+    `);
+    
+    res.render('admin/products', {
+      user: req.session.user,
+      products
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Admin - Toggle product status
+app.post('/admin/products/:id/toggle', isAdmin, validateProductId, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE products SET is_active = NOT is_active WHERE id = ?',
+      [req.productId]
+    );
+    
+    res.redirect('/admin/products');
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Admin - Delete product
+app.post('/admin/products/:id/delete', isAdmin, validateProductId, async (req, res) => {
+  try {
+    const [products] = await db.query('SELECT * FROM products WHERE id = ?', [req.productId]);
+    
+    if (products.length > 0) {
+      const imagePath = path.join(__dirname, 'public', 'uploads', products[0].image);
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+    }
+    
+    await db.query('DELETE FROM products WHERE id = ?', [req.productId]);
+    
+    res.redirect('/admin/products');
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+// middleware to handle 404 errors
+
+// Error handling middleware (should be near the end of app.js, before the server starts)
+app.use((err, req, res, next) => {
+  console.error(`ERROR (${err.statusCode || 500}): ${err.message}`);
+  
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Something went wrong!';
+  
+  res.status(statusCode).render('error', {
+    title: `Error ${statusCode}`,
+    status: statusCode,
+    message: message,
+    user: req.session.user || null,
+    showSearch: statusCode === 404
+  });
+});
+
+// Start server
+app.listen(port, () => {
+  console.log(`Server running on http://localhost:${port}`);
+});
+

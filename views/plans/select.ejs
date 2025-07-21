@@ -1,0 +1,47 @@
+<%- include('../partials/header', { user }) %>
+
+<div class="container my-5">
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+      <% if (message) { %>
+        <div class="alert alert-<%= message.type %>">
+          <%= message.text %>
+        </div>
+      <% } %>
+
+      <h2 class="mb-4">Select Your Plan</h2>
+      
+      <div class="row">
+        <% plans.forEach(plan => { %>
+          <div class="col-md-4 mb-4">
+            <div class="card h-100 <%= user.plan_id === plan.id ? 'border-primary' : '' %>">
+              <div class="card-header <%= user.plan_id === plan.id ? 'bg-primary text-white' : '' %>">
+                <h4 class="my-0"><%= plan.name %></h4>
+              </div>
+              <div class="card-body">
+                <h2 class="card-title">₹<%= plan.price %></h2>
+                <ul class="list-unstyled mt-3">
+                  <li><%= plan.max_products %> product listings</li>
+                  <li>24/7 support</li>
+                  <li>Featured listings</li>
+                </ul>
+                <form action="/plans/select" method="POST">
+                  <input type="hidden" name="plan_id" value="<%= plan.id %>">
+                  <button type="submit" class="btn btn-lg btn-primary w-100">
+                    <% if (user.plan_id === plan.id) { %>
+                      Current Plan
+                    <% } else { %>
+                      Select Plan
+                    <% } %>
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        <% }) %>
+      </div>
+    </div>
+  </div>
+</div>
+
+<%- include('../partials/footer') %>

@@ -1,0 +1,73 @@
+<%- include('../../partials/admin-header', { admin, activePage: 'products' }) %>
+
+<div class="container-fluid">
+  <div class="row">
+    <%- include('../../partials/admin-sidebar', { activePage: 'products' }) %>
+
+    <main class="col-md-9 ms-sm-auto px-md-4">
+      <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+        <h1 class="h2">Pending Product Approvals</h1>
+        <div class="btn-toolbar mb-2 mb-md-0">
+          <div class="btn-group me-2">
+            <a href="/admin/products/flagged" class="btn btn-sm btn-outline-danger">
+              <i class="bi bi-flag"></i> Flagged Products
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-striped table-hover">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Product</th>
+              <th>Seller</th>
+              <th>Price</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% products.forEach(product => { %>
+              <tr>
+                <td><%= product.id %></td>
+                <td>
+                  <a href="/products/<%= product.id %>" class="text-decoration-none">
+                    <img src="/uploads/<%= product.image %>" width="50" height="50" class="rounded me-2">
+                    <%= product.title %>
+                  </a>
+                </td>
+                <td><%= product.user_name %></td>
+                <td>₹<%= product.price %></td>
+                <td>
+                  <span class="badge <%= product.is_approved ? 'bg-success' : 'bg-warning text-dark' %>">
+                    <%= product.is_approved ? 'Approved' : 'Pending' %>
+                  </span>
+                </td>
+                <td>
+                  <div class="btn-group btn-group-sm">
+                    <form action="/admin/products/<%= product.id %>/approve" method="POST" class="d-inline">
+                      <input type="hidden" name="action" value="approve">
+                      <button type="submit" class="btn btn-outline-success">
+                        <i class="bi bi-check-circle"></i> Approve
+                      </button>
+                    </form>
+                    <form action="/admin/products/<%= product.id %>/approve" method="POST" class="d-inline">
+                      <input type="hidden" name="action" value="reject">
+                      <button type="submit" class="btn btn-outline-danger">
+                        <i class="bi bi-x-circle"></i> Reject
+                      </button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+</div>
+
+<%- include('../../partials/admin-footer') %>

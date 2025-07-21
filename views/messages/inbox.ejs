@@ -1,0 +1,83 @@
+<%- include('../partials/header', { user }) %>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha512-Evv84Mr4kqVGRNSgIGL/F/aIDqQb7xQ2vcrdIwxfjThSH8CSR7PBEakCr51Ck+w+/U6swU2Im1vVX0SVk9ABhg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<div class="container my-4">
+  <div class="row">
+    <div class="col-md-3">
+      <div class="card">
+        <div class="card-header bg-primary text-white">
+          <h5><i class="bi bi-inbox"></i> Messages</h5>
+        </div>
+        <div class="list-group list-group-flush">
+          <a href="/messages" class="list-group-item list-group-item-action <%= activeTab === 'inbox' ? 'active' : '' %>">
+            <i class="bi bi-inbox-fill"></i> Inbox
+          </a>
+        </div>
+      </div>
+    </div>
+    
+    <div class="col-md-9">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0 fw-bold mx-auto"><i class="fa-solid fa-message" style="color: #0d6efd;"></i> Your Conversations</h5>
+          <span class="badge bg-primary rounded-pill">
+            <%= conversations.reduce((total, conv) => total + conv.unread_count, 0) %> unread
+            <i class="bi bi-arrow-down-circle-fill"></i>
+          </span>
+        </div>
+        
+        <div class="list-group list-group-flush">
+          <% if (conversations.length === 0) { %>
+            <div class="p-4 text-center text-muted">
+              <i class="bi bi-chat-square-text" style="font-size: 2rem;"></i>
+              <p class="mt-2">No messages yet</p>
+            </div>
+          <% } %>
+          
+          <% conversations.forEach(conv => { %>
+            <a href="/messages/<%= conv.product_id %>/<%= conv.other_user_id %>" 
+               class="list-group-item list-group-item-action <%= conv.unread_count > 0 ? 'unread-conversation' : '' %>">
+              <div class="d-flex align-items-center">
+                <img src="/uploads/<%= conv.product_image %>" 
+                     class="rounded me-3" 
+                     style="width: 50px; height: 50px; object-fit: cover;">
+                
+                <div class="flex-grow-1">
+                  <div class="d-flex justify-content-between">
+                    <h6 class="mb-0"><%= conv.product_title %></h6>
+                    <small class="text-muted"><%= new Date(conv.last_message_time).toLocaleDateString() %></small>
+                  </div>
+                  
+                  <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                      <small class="text-muted">With <%= conv.other_user_name %></small>
+                      <p class="mb-0 text-truncate" style="max-width: 300px;">
+                        <%= conv.last_message %>
+                      </p>
+                    </div>
+                    
+                    <% if (conv.unread_count > 0) { %>
+                      <span class="badge bg-danger rounded-pill"><%= conv.unread_count %></span>
+                    <% } %>
+                  </div>
+                </div>
+              </div>
+            </a>
+          <% }) %>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<%- include('../partials/footer') %>
+
+<style>
+  .unread-conversation {
+    background-color: rgba(13, 110, 253, 0.05);
+    border-left: 3px solid #0d6efd;
+  }
+  
+  .unread-conversation h6 {
+    font-weight: bold;
+  }
+</style>

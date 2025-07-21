@@ -1,0 +1,116 @@
+<%- include('../../partials/admin-header', { admin, activePage: 'categories' }) %>
+
+<div class="container-fluid">
+  <div class="row">
+    <%- include('../../partials/admin-sidebar', { activePage: 'categories' }) %>
+
+    <main class="col-md-9 ms-sm-auto px-md-4">
+      <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+        <h1 class="h2">Categories Management</h1>
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
+          <i class="bi bi-plus-circle"></i> Add Category
+        </button>
+      </div>
+
+      <div class="row">
+        <% categories.forEach(category => { %>
+          <div class="col-md-4 mb-4">
+            <div class="card h-100">
+              <% if (category.image) { %>
+                <img src="/uploads/categories/<%= category.image %>" class="card-img-top" style="height: 200px; object-fit: cover;">
+              <% } else { %>
+                <div class="card-img-top bg-secondary" style="height: 200px; display: flex; align-items: center; justify-content: center;">
+                  <i class="bi bi-image text-white" style="font-size: 3rem;"></i>
+                </div>
+              <% } %>
+              <div class="card-body">
+                <h5 class="card-title"><%= category.name %></h5>
+                <p class="card-text">
+                  <span class="badge bg-primary"><%= category.product_count %> products</span>
+                  <% if (category.subcategory_count > 0) { %>
+                    <span class="badge bg-info ms-1"><%= category.subcategory_count %> subcategories</span>
+                  <% } %>
+                </p>
+              </div>
+              <div class="card-footer bg-white">
+                <div class="btn-group btn-group-sm w-100">
+                  <button type="button" class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editCategoryModal<%= category.id %>">
+                    <i class="bi bi-pencil"></i> Edit
+                  </button>
+                  <form action="/admin/categories/<%= category.id %>/delete" method="POST" class="d-inline">
+                    <button type="submit" class="btn btn-outline-danger" onclick="return confirm('Are you sure? This will also delete all subcategories.')">
+                      <i class="bi bi-trash"></i> Delete
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Edit Category Modal -->
+          <div class="modal fade" id="editCategoryModal<%= category.id %>" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog">
+              <div class="modal-content">
+                <form action="/admin/categories/<%= category.id %>/update" method="POST" enctype="multipart/form-data">
+                  <div class="modal-header">
+                    <h5 class="modal-title">Edit Category</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                  </div>
+                  <div class="modal-body">
+                    <div class="mb-3">
+                      <label for="name<%= category.id %>" class="form-label">Category Name</label>
+                      <input type="text" class="form-control" id="name<%= category.id %>" name="name" value="<%= category.name %>" required>
+                    </div>
+                    <div class="mb-3">
+                      <label for="image<%= category.id %>" class="form-label">Category Image</label>
+                      <input type="file" class="form-control" id="image<%= category.id %>" name="image">
+                      <% if (category.image) { %>
+                        <div class="mt-2">
+                          <img src="/uploads/categories/<%= category.image %>" width="100" class="img-thumbnail">
+                        </div>
+                      <% } %>
+                    </div>
+                  </div>
+                  <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        <% }) %>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Add Category Modal -->
+<div class="modal fade" id="addCategoryModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form action="/admin/categories" method="POST" enctype="multipart/form-data">
+        <div class="modal-header">
+          <h5 class="modal-title">Add New Category</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="name" class="form-label">Category Name</label>
+            <input type="text" class="form-control" id="name" name="name" required>
+          </div>
+          <div class="mb-3">
+            <label for="image" class="form-label">Category Image</label>
+            <input type="file" class="form-control" id="image" name="image">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Add Category</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<%- include('../../partials/admin-footer') %>

@@ -1,0 +1,56 @@
+<%- include('../partials/header', { user, product }) %>
+
+<% if (!product) { %>
+  <div class="container my-5">
+    <div class="alert alert-warning">
+      <h4><i class="bi bi-exclamation-triangle"></i> Product Not Available</h4>
+      <p>The product you're looking for has been removed or doesn't exist.</p>
+      <div class="mt-3">
+        <a href="/" class="btn btn-primary me-2">
+          <i class="bi bi-house"></i> Browse Products
+        </a>
+        <% if (user && user.id === product?.user_id) { %>
+          <a href="/profile" class="btn btn-outline-primary">
+            <i class="bi bi-person"></i> My Products
+          </a>
+        <% } %>
+      </div>
+    </div>
+  </div>
+<% } else { %>
+  <div class="container my-4">
+    <nav aria-label="breadcrumb">
+      <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">Home</a></li>
+        <li class="breadcrumb-item"><a href="/search?category=<%= product.category %>"><%= product.category %></a></li>
+        <li class="breadcrumb-item active" aria-current="page"><%= product.title %></li>
+      </ol>
+    </nav>
+
+    <div class="row">
+      <div class="col-md-8">
+        <!-- Product details -->
+      </div>
+      <div class="col-md-4">
+        <!-- Seller info -->
+      </div>
+    </div>
+
+    <% if (similarProducts.length > 0) { %>
+      <div class="row mt-5">
+        <div class="col-12">
+          <h4>Similar Products</h4>
+          <div class="row">
+            <% similarProducts.forEach(product => { %>
+              <div class="col-md-3 mb-4">
+                <!-- Product card -->
+              </div>
+            <% }) %>
+          </div>
+        </div>
+      </div>
+    <% } %>
+  </div>
+<% } %>
+
+<%- include('../partials/footer') %>

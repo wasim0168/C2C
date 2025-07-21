@@ -1,0 +1,59 @@
+<%- include('../partials/header', { user }) %>
+
+<div class="container-fluid mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Manage Products</h2>
+  </div>
+  
+  <div class="card">
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-striped">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Image</th>
+              <th>Title</th>
+              <th>Price</th>
+              <th>Seller</th>
+              <th>Status</th>
+              <th>Posted</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% products.forEach(product => { %>
+              <tr>
+                <td><%= product.id %></td>
+                <td><img src="/uploads/<%= product.image %>" alt="<%= product.title %>" style="width: 50px; height: 50px; object-fit: cover;"></td>
+                <td><%= product.title %></td>
+                <td>₹<%= product.price %></td>
+                <td><%= product.user_name %><br><small><%= product.user_email %></small></td>
+                <td>
+                  <% if (product.is_active) { %>
+                    <span class="badge bg-success">Active</span>
+                  <% } else { %>
+                    <span class="badge bg-danger">Inactive</span>
+                  <% } %>
+                </td>
+                <td><%= new Date(product.created_at).toLocaleDateString() %></td>
+                <td>
+                  <form action="/admin/products/<%= product.id %>/toggle" method="POST" class="d-inline">
+                    <button type="submit" class="btn btn-sm <%= product.is_active ? 'btn-warning' : 'btn-success' %>">
+                      <%= product.is_active ? 'Deactivate' : 'Activate' %>
+                    </button>
+                  </form>
+                  <form action="/admin/products/<%= product.id %>/delete" method="POST" class="d-inline">
+                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure?')">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<%- include('../partials/footer') %>
