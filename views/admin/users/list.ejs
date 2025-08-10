@@ -1,72 +1,474 @@
 <%- include('../../partials/admin-header', { admin }) %>
 
-<div class="container-fluid">
+<div class="container-fluid admin-container">
   <div class="row">
     <%- include('../../partials/admin-sidebar') %>
 
-    <main class="col-md-9 ms-sm-auto px-md-4">
-      <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
-        <h1 class="h2">User Management</h1>
-        <div class="btn-toolbar mb-2 mb-md-0">
-          <div class="btn-group me-2">
-            <button type="button" class="btn btn-sm btn-outline-secondary">Export</button>
+    <main class="col-md-9 ms-sm-auto px-lg-4 px-2">
+      <!-- Header Section -->
+      <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-4 pb-3 mb-4 border-bottom">
+        <div class="d-flex align-items-center">
+          <div class="icon-circle bg-primary-light me-3">
+            <i class="fas fa-users-cog text-primary"></i>
+          </div>
+          <div>
+            <h1 class="h3 mb-0">User Management</h1>
+            <p class="text-muted mb-0">
+              <span class="badge bg-primary-soft text-primary"><%= users.length %> users</span>
+              <span class="mx-2">•</span>
+              <i class="fas fa-user-check text-success me-1"></i>
+              <span class="text-muted"><%= users.filter(u => u.email_verified).length %> verified</span>
+            </p>
+          </div>
+        </div>
+        
+        <div class="d-flex align-items-center mt-3 mt-md-0">
+          <div class="input-group search-group me-2">
+            <span class="input-group-text bg-transparent border-end-0">
+              <i class="fas fa-search text-muted"></i>
+            </span>
+            <input type="text" class="form-control border-start-0" placeholder="Search users..." id="userSearch">
+          </div>
+          
+          <div class="dropdown ms-2">
+            <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" id="exportDropdown" data-bs-toggle="dropdown">
+              <i class="fas fa-file-export me-1"></i> Export
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><a class="dropdown-item" href="#"><i class="fas fa-file-csv me-2"></i> CSV</a></li>
+              <li><a class="dropdown-item" href="#"><i class="fas fa-file-excel me-2"></i> Excel</a></li>
+              <li><a class="dropdown-item" href="#"><i class="fas fa-file-pdf me-2"></i> PDF</a></li>
+            </ul>
+          </div>
+          
+          <button class="btn btn-sm btn-primary ms-2" data-bs-toggle="modal" data-bs-target="#newUserModal">
+            <i class="fas fa-plus me-1"></i> New
+          </button>
+        </div>
+      </div>
+
+      <!-- Stats Cards -->
+      <div class="row mb-4 g-3">
+        <div class="col-6 col-md-3">
+          <div class="card stat-card bg-primary-soft border-0">
+            <div class="card-body">
+              <div class="d-flex align-items-center">
+                <div class="icon-circle bg-primary-light">
+                  <i class="fas fa-users text-primary"></i>
+                </div>
+                <div class="ms-3">
+                  <h6 class="mb-0">Total Users</h6>
+                  <h3 class="mb-0"><%= users.length %></h3>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="col-6 col-md-3">
+          <div class="card stat-card bg-success-soft border-0">
+            <div class="card-body">
+              <div class="d-flex align-items-center">
+                <div class="icon-circle bg-success-light">
+                  <i class="fas fa-user-check text-success"></i>
+                </div>
+                <div class="ms-3">
+                  <h6 class="mb-0">Active</h6>
+                  <h3 class="mb-0"><%= users.filter(u => !u.is_blocked).length %></h3>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="col-6 col-md-3">
+          <div class="card stat-card bg-warning-soft border-0">
+            <div class="card-body">
+              <div class="d-flex align-items-center">
+                <div class="icon-circle bg-warning-light">
+                  <i class="fas fa-envelope text-warning"></i>
+                </div>
+                <div class="ms-3">
+                  <h6 class="mb-0">Pending</h6>
+                  <h3 class="mb-0"><%= users.filter(u => !u.email_verified).length %></h3>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="col-6 col-md-3">
+          <div class="card stat-card bg-danger-soft border-0">
+            <div class="card-body">
+              <div class="d-flex align-items-center">
+                <div class="icon-circle bg-danger-light">
+                  <i class="fas fa-user-slash text-danger"></i>
+                </div>
+                <div class="ms-3">
+                  <h6 class="mb-0">Blocked</h6>
+                  <h3 class="mb-0"><%= users.filter(u => u.is_blocked).length %></h3>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div class="table-responsive">
-        <table class="table table-striped table-hover">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Products</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-           <% users.forEach(user => { %>
-  <tr>
-     <td><%= user.id %></td>
-    <td><%= user.name %></td>
-    <td><%= user.email %></td>
-  <td><%= user.product_count %></td>
-    <td><%= user.email_verified ? 'Verified' : 'Not Verified' %></td>
-    <td>
-      <% if (user.is_blocked) { %>
-        <span class="badge bg-danger">Blocked</span>
-        <small class="text-muted d-block"><%= user.blocked_reason %></small>
-      <% } else { %>
-        <span class="badge bg-success">Active</span>
-      <% } %>
-    </td>
-    <td>
-      
+      <!-- Main Table -->
+      <div class="card border-0 shadow-sm">
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+              <thead class="bg-light">
+                <tr>
+                  <th class="ps-4">User</th>
+                  <th class="d-none d-md-table-cell">Contact</th>
+                  <th>Status</th>
+                  <th class="text-end pe-4">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <% users.forEach(user => { %>
+                  <tr>
+                    <td class="ps-4">
+                      <div class="d-flex align-items-center">
+                        <div class="avatar avatar-sm me-3 position-relative">
+                          <img src="<%= user.avatar || '/images/default-avatar.jpg' %>" 
+                               class="rounded-circle" 
+                               alt="<%= user.name %>"
+                               onerror="this.src='/images/default-avatar.jpg'">
+                          <% if(user.email_verified) { %>
+                            <span class="position-absolute bottom-0 end-0 bg-success rounded-circle p-1 border border-2 border-white"></span>
+                          <% } %>
+                        </div>
+                        <div>
+                          <h6 class="mb-0 fw-bold"><%= user.name %></h6>
+                          <div class="d-flex align-items-center text-muted">
+                            <small class="me-2">ID: <%= user.id %></small>
+                            <i class="fas fa-box-open me-1 text-info"></i>
+                            <small><%= user.product_count %></small>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="d-none d-md-table-cell">
+                      <div><i class="fas fa-envelope me-1 text-muted"></i> <%= user.email %></div>
+                      <% if(user.phone) { %>
+                        <small class="text-muted"><i class="fas fa-phone me-1"></i> <%= user.phone %></small>
+                      <% } %>
+                    </td>
+                    <td>
+                      <% if (user.is_blocked) { %>
+                        <span class="badge bg-danger-soft text-danger rounded-pill">
+                          <i class="fas fa-ban me-1"></i> Blocked
+                        </span>
+                      <% } else { %>
+                        <span class="badge bg-<%= user.email_verified ? 'success' : 'warning' %>-soft text-<%= user.email_verified ? 'success' : 'warning' %> rounded-pill">
+                          <i class="fas fa-<%= user.email_verified ? 'check-circle' : 'envelope' %> me-1"></i>
+                          <%= user.email_verified ? 'Verified' : 'Pending' %>
+                        </span>
+                      <% } %>
+                      <div class="text-muted small mt-1">
+                        <i class="fas fa-calendar-alt me-1"></i>
+                        <%= new Date(user.created_at).toLocaleDateString() %>
+                      </div>
+                    </td>
+                    <td class="text-end pe-4">
+                      <div class="btn-group btn-group-sm" role="group">
+                        <a href="/admin/users/<%= user.id %>/products" 
+                           class="btn btn-outline-primary"
+                           data-bs-toggle="tooltip" title="View Products">
+                          <i class="fas fa-box-open"></i>
+                          <span class="d-none d-lg-inline"> Products</span>
+                        </a>
+                        
+                        <% if (user.is_blocked) { %>
+                          <form action="/admin/users/<%= user.id %>/unblock" method="POST" class="d-inline">
+                            <button type="submit" 
+                                    class="btn btn-outline-success"
+                                    data-bs-toggle="tooltip" title="Unblock User">
+                              <i class="fas fa-lock-open"></i>
+                              <span class="d-none d-lg-inline"> Unblock</span>
+                            </button>
+                          </form>
+                        <% } else { %>
+                          <button class="btn btn-outline-danger" 
+                                  data-bs-toggle="modal" 
+                                  data-bs-target="#blockUserModal<%= user.id %>"
+                                  data-bs-toggle="tooltip" title="Block User">
+                            <i class="fas fa-lock"></i>
+                            <span class="d-none d-lg-inline"> Block</span>
+                          </button>
+                        <% } %>
+                      </div>
+                    </td>
+                  </tr>
 
-    <a href="/admin/users/<%= user.id %>/products" class="btn btn-sm btn-info">View</a>
-    
-    <td>
-      <% if (user.is_blocked) { %>
-        <form action="/admin/users/<%= user.id %>/unblock" method="POST" class="d-inline">
-          <button type="submit" class="btn btn-sm btn-success">Unblock</button>
-        </form>
-      <% } else { %>
-        <form action="/admin/users/<%= user.id %>/block" method="POST" class="d-inline">
-          <button type="submit" class="btn btn-sm btn-danger">Block</button>
-          <input type="text" name="reason" class="form-control form-control-sm d-inline-block w-50 ms-1" 
-                 placeholder="Reason" required>
-        </form>
-      <% } %>
-    </td>
-  </tr>
-<% }) %>
-          </tbody>
-        </table>
+                  <!-- Block User Modal -->
+                  <div class="modal fade" id="blockUserModal<%= user.id %>" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog">
+                      <div class="modal-content">
+                        <div class="modal-header bg-light">
+                          <h5 class="modal-title">
+                            <i class="fas fa-lock text-danger me-2"></i>
+                            Block User
+                          </h5>
+                          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <form action="/admin/users/<%= user.id %>/block" method="POST">
+                          <div class="modal-body">
+                            <div class="alert alert-warning">
+                              <i class="fas fa-exclamation-triangle me-2"></i>
+                              You are about to block <strong><%= user.name %></strong>.
+                            </div>
+                            <div class="mb-3">
+                              <label for="blockReason<%= user.id %>" class="form-label">
+                                <i class="fas fa-comment-dots me-1"></i>
+                                Reason for blocking
+                              </label>
+                              <textarea class="form-control" id="blockReason<%= user.id %>" name="reason" rows="3" required></textarea>
+                            </div>
+                          </div>
+                          <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                              <i class="fas fa-times me-1"></i> Cancel
+                            </button>
+                            <button type="submit" class="btn btn-danger">
+                              <i class="fas fa-lock me-1"></i> Confirm Block
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                <% }) %>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
+
+      <!-- Pagination -->
+      <nav aria-label="User pagination" class="mt-4">
+        <ul class="pagination justify-content-center flex-wrap">
+          <li class="page-item disabled">
+            <a class="page-link" href="#" tabindex="-1">
+              <i class="fas fa-chevron-left"></i>
+            </a>
+          </li>
+          <li class="page-item active"><a class="page-link" href="#">1</a></li>
+          <li class="page-item"><a class="page-link" href="#">2</a></li>
+          <li class="page-item"><a class="page-link" href="#">3</a></li>
+          <li class="page-item">
+            <a class="page-link" href="#">
+              <i class="fas fa-chevron-right"></i>
+            </a>
+          </li>
+        </ul>
+      </nav>
     </main>
   </div>
 </div>
 
+<!-- New User Modal -->
+<div class="modal fade" id="newUserModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title">
+          <i class="fas fa-user-plus me-2"></i>
+          Create New User
+        </h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form action="/admin/users/create" method="POST">
+        <div class="modal-body">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label for="newUserName" class="form-label">
+                <i class="fas fa-user me-1"></i> Full Name
+              </label>
+              <input type="text" class="form-control" id="newUserName" name="name" required>
+            </div>
+            <div class="col-md-6">
+              <label for="newUserEmail" class="form-label">
+                <i class="fas fa-envelope me-1"></i> Email
+              </label>
+              <input type="email" class="form-control" id="newUserEmail" name="email" required>
+            </div>
+            <div class="col-md-6">
+              <label for="newUserPassword" class="form-label">
+                <i class="fas fa-lock me-1"></i> Password
+              </label>
+              <div class="input-group">
+                <input type="password" class="form-control" id="newUserPassword" name="password" required>
+                <button class="btn btn-outline-secondary" type="button" id="togglePassword">
+                  <i class="fas fa-eye"></i>
+                </button>
+              </div>
+              <div class="password-strength mt-2">
+                <div class="progress" style="height: 4px;">
+                  <div class="progress-bar bg-danger" role="progressbar" style="width: 25%"></div>
+                </div>
+                <small class="text-muted">Password strength: Weak</small>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <label for="newUserRole" class="form-label">
+                <i class="fas fa-user-tag me-1"></i> Role
+              </label>
+              <select class="form-select" id="newUserRole" name="role">
+                <option value="user">Standard User</option>
+                <option value="editor">Content Editor</option>
+                <option value="admin">Administrator</option>
+              </select>
+            </div>
+            <div class="col-12">
+              <label for="newUserBio" class="form-label">
+                <i class="fas fa-info-circle me-1"></i> Bio (Optional)
+              </label>
+              <textarea class="form-control" id="newUserBio" name="bio" rows="2"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+            <i class="fas fa-times me-1"></i> Cancel
+          </button>
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-save me-1"></i> Create User
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <%- include('../../partials/admin-footer') %>
+
+<style>
+  .admin-container {
+    background-color: #f8fafc;
+    min-height: 100vh;
+  }
+  .icon-circle {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .avatar {
+    width: 40px;
+    height: 40px;
+    overflow: hidden;
+  }
+  .stat-card {
+    transition: transform 0.2s;
+  }
+  .stat-card:hover {
+    transform: translateY(-3px);
+  }
+  .bg-primary-soft {
+    background-color: rgba(13, 110, 253, 0.1);
+  }
+  .bg-success-soft {
+    background-color: rgba(25, 135, 84, 0.1);
+  }
+  .bg-warning-soft {
+    background-color: rgba(255, 193, 7, 0.1);
+  }
+  .bg-danger-soft {
+    background-color: rgba(220, 53, 69, 0.1);
+  }
+  .bg-primary-light {
+    background-color: rgba(13, 110, 253, 0.2);
+  }
+  .search-group .form-control:focus {
+    box-shadow: none;
+    border-color: #ced4da;
+  }
+  @media (max-width: 768px) {
+    .stat-card h3 {
+      font-size: 1.25rem;
+    }
+    .search-group {
+      width: 180px;
+    }
+  }
+  @media (max-width: 576px) {
+    .stat-card h6 {
+      font-size: 0.75rem;
+    }
+    .stat-card h3 {
+      font-size: 1rem;
+    }
+  }
+</style>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    // Initialize tooltips
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+      return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+    
+    // Search functionality
+    const userSearch = document.getElementById('userSearch');
+    if (userSearch) {
+      userSearch.addEventListener('input', function(e) {
+        const searchTerm = e.target.value.toLowerCase();
+        document.querySelectorAll('tbody tr').forEach(row => {
+          const text = row.textContent.toLowerCase();
+          row.style.display = text.includes(searchTerm) ? '' : 'none';
+        });
+      });
+    }
+    
+    // Password toggle
+    const togglePassword = document.getElementById('togglePassword');
+    if (togglePassword) {
+      togglePassword.addEventListener('click', function() {
+        const passwordInput = document.getElementById('newUserPassword');
+        const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+        passwordInput.setAttribute('type', type);
+        this.innerHTML = type === 'password' ? '<i class="fas fa-eye"></i>' : '<i class="fas fa-eye-slash"></i>';
+      });
+    }
+    
+    // Password strength indicator
+    const passwordInput = document.getElementById('newUserPassword');
+    if (passwordInput) {
+      passwordInput.addEventListener('input', function() {
+        const strength = calculatePasswordStrength(this.value);
+        const strengthBar = document.querySelector('.password-strength .progress-bar');
+        const strengthText = document.querySelector('.password-strength small');
+        
+        strengthBar.style.width = strength.percentage + '%';
+        strengthBar.className = 'progress-bar ' + strength.class;
+        strengthText.textContent = 'Password strength: ' + strength.text;
+      });
+    }
+    
+    function calculatePasswordStrength(password) {
+      let strength = 0;
+      if (password.length > 0) strength += 10;
+      if (password.length >= 8) strength += 30;
+      if (/[A-Z]/.test(password)) strength += 20;
+      if (/[0-9]/.test(password)) strength += 20;
+      if (/[^A-Za-z0-9]/.test(password)) strength += 20;
+      
+      strength = Math.min(100, strength);
+      
+      if (strength < 40) {
+        return { percentage: strength, class: 'bg-danger', text: 'Weak' };
+      } else if (strength < 70) {
+        return { percentage: strength, class: 'bg-warning', text: 'Moderate' };
+      } else {
+        return { percentage: strength, class: 'bg-success', text: 'Strong' };
+      }
+    }
+  });
+</script>

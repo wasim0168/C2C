@@ -1,0 +1,2953 @@
+require('dotenv').config();
+const express = require('express');
+const session = require('express-session');
+const mysql = require('mysql2/promise');
+const bcrypt = require('bcrypt');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const Razorpay = require('razorpay');
+const crypto = require('crypto');
+const app = express();
+const port = process.env.PORT || 3000;
+const http = require('http');
+const { Server } = require('socket.io');
+const categoryUpload = multer({ dest: 'public/uploads/categories/' });
+const { body, validationResult } = require('express-validator');
+const sanitizeHtml = require('sanitize-html');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const RedisStore = require('rate-limit-redis');
+const redisClient = require('redis').createClient();
+const morgan = require('morgan');
+const { createWriteStream } = require('fs');
+const passwordValidator = require('password-validator');
+// Initialize Razorpay
+const securityLogStream = createWriteStream(path.join(__dirname, 'security.log'), { flags: 'a' });
+const passwordSchema = new passwordValidator();
+passwordSchema
+  .is().min(10)
+  .is().max(100)
+  .has().uppercase()
+  .has().lowercase()
+  .has().digits()
+  .has().symbols()
+  .has().not().spaces();
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
+// Database connection
+const db = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'olx_clone',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
+
+app.use(morgan('combined', {
+  stream: securityLogStream,
+  skip: (req) => req.path.includes('/public/') // Skip static files
+}));
+// chat server
+const server = http.createServer(app);
+const io = new Server(server);
+
+// Socket.io connection
+// Socket.io Setup (add to your existing code)
+io.on('connection', (socket) => {
+  console.log('New client connected:', socket.id);
+
+  // Join user to their personal room
+  socket.on('register', (userId) => {
+    socket.join(`user_${userId}`);
+    console.log(`User ${userId} registered with socket ${socket.id}`);
+  });
+
+  // Handle new messages
+  socket.on('sendMessage', async (data) => {
+    try {
+      const { senderId, receiverId, productId, message } = data;
+      
+      // Save message to database
+      const [result] = await db.query(
+        `INSERT INTO messages 
+        (sender_id, receiver_id, product_id, message) 
+        VALUES (?, ?, ?, ?)`,
+        [senderId, receiverId, productId, message]
+      );
+
+      // Get sender details
+      const [sender] = await db.query(
+        'SELECT id, name FROM users WHERE id = ?', 
+        [senderId]
+      );
+
+      // Construct message object
+      const messageObj = {
+        id: result.insertId,
+        senderId,
+        senderName: sender[0].name,
+        productId,
+        message,
+        timestamp: new Date()
+      };
+
+      // Emit to receiver
+      io.to(`user_${receiverId}`).emit('newMessage', messageObj);
+      
+      // Also emit back to sender (for their own UI update)
+      io.to(`user_${senderId}`).emit('newMessage', messageObj);
+
+    } catch (error) {
+      console.error('Error sending message:', error);
+    }
+  });
+
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
+// rate limit
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, // limit each IP to 1000 requests per windowMs
+  message: 'Too many requests from this IP, please try again later',
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 attempts per 15 mins
+  message: 'Too many login attempts, account temporarily locked',
+  skipSuccessfulRequests: true, // Only count failed attempts
+  handler: (req, res) => {
+    req.session.authAttempts = (req.session.authAttempts || 0) + 1;
+    res.status(429).render('auth/login', { 
+      error: `Too many attempts! ${10 - req.session.authAttempts} remaining`
+    });
+  }
+});
+
+// API-specific rate limiting (if you have API routes)
+const apiLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 500, // limit each IP to 500 requests per hour
+  message: 'Too many API requests from this IP, please try again later',
+});
+const paymentLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 5, // 5 payment attempts per 10 mins
+  message: 'Payment attempt limit exceeded'
+});
+
+// rateLimit radis
+
+const globalLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 300,
+  message: 'Too many requests, please try again later',
+  standardHeaders: true,
+  skip: (req) => req.path.startsWith('/public/'),
+  handler: (req, res) => {
+    securityLogStream.write(`[RATE LIMIT] IP: ${req.ip} Path: ${req.path}\n`);
+    res.status(429).json({ error: 'Too many requests' });
+  }
+});
+
+const sensitiveLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 50,
+  message: 'Too many sensitive operations detected'
+});
+
+app.use(globalLimiter);
+app.use(generalLimiter);
+app.use('/api/', apiLimiter , sensitiveLimiter);
+app.use('/auth/login', authLimiter);
+app.use('/auth/register', authLimiter);
+app.use('/admin/login', authLimiter);
+app.use('/plans/create-order', paymentLimiter);
+app.use('/plans/verify-payment', paymentLimiter);
+app.use('/verify-payment', paymentLimiter);
+if (process.env.NODE_ENV === 'production') {
+  const redisClient = require('redis').createClient({
+    url: process.env.REDIS_URL
+  });
+  
+  const prodLimiter = rateLimit({
+    store: new RedisStore({
+      client: redisClient,
+      prefix: 'rl:'
+    }),
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 1000
+  });
+  
+  app.use(prodLimiter);
+}
+// Middleware
+app.use(helmet());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  resave: false,
+  saveUninitialized: true,
+  cookie: { secure: false }
+}));
+
+
+// Security headers middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://checkout.razorpay.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://api.razorpay.com; frame-src https://checkout.razorpay.com");
+  next();
+});
+app.use((req, res, next) => {
+  // Log authentication attempts
+  if (req.path.includes('/auth/login') || req.path.includes('/auth/register')) {
+    securityLogStream.write(`[AUTH ATTEMPT] ${req.method} ${req.path} from IP: ${req.ip}\n`);
+  }
+
+  // Log admin actions
+  if (req.path.startsWith('/admin/') && req.session.admin) {
+    securityLogStream.write(`[ADMIN ACTION] ${req.session.admin.email} - ${req.method} ${req.path}\n`);
+  }
+
+  // Log payment attempts
+  if (req.path.includes('/payment') || req.path.includes('/verify-payment')) {
+    securityLogStream.write(`[PAYMENT ATTEMPT] ${req.method} ${req.path}\n`);
+  }
+
+  next();
+});
+
+const failedAttempts = new Map();
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_TIME = 15 * 60 * 1000; // 15 minutes
+
+app.use((req, res, next) => {
+  res.locals.cspNonce = crypto.randomBytes(16).toString('hex');
+  next();
+});
+// ... [Rest of your existing application code] ...
+
+// Error handling with security logging
+app.use((err, req, res, next) => {
+  securityLogStream.write(`[ERROR] ${err.stack || err.message}\n`);
+  
+  const statusCode = err.statusCode || 500;
+  const message = statusCode === 500 ? 'Something went wrong!' : err.message;
+  
+  res.status(statusCode).render('error', {
+    status: statusCode,
+    message: message,
+    user: req.session.user || null
+  });
+});
+// helmet 
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: [
+        "'self'", 
+        "'unsafe-inline'", 
+        "'unsafe-eval'", 
+        "https://cdn.jsdelivr.net", 
+        "https://checkout.razorpay.com"
+      ],
+      styleSrc: [
+        "'self'", 
+        "'unsafe-inline'", 
+        "https://cdn.jsdelivr.net",
+        "https://cdnjs.cloudflare.com", // ✅ Allow Font Awesome CSS
+        "https://fonts.googleapis.com"  // ✅ Allow Google Fonts
+      ],
+      imgSrc: ["'self'", "data:", "https:"],
+      fontSrc: [
+        "'self'", 
+        "https://cdn.jsdelivr.net",
+        "https://cdnjs.cloudflare.com", // ✅ Allow Font Awesome fonts
+        "https://fonts.gstatic.com"     // ✅ Allow Google Fonts
+      ],
+      connectSrc: [
+        "'self'", 
+        "https://api.razorpay.com",
+        "https://lumberjack.razorpay.com" // ✅ Razorpay analytics
+      ],
+      frameSrc: [
+        "https://checkout.razorpay.com", 
+        "https://api.razorpay.com"
+      ]
+    }
+  }
+}));
+// 
+const sanitizeInput = (req, res, next) => {
+  // Sanitize all string fields in body
+  if (req.body) {
+    for (const key in req.body) {
+      if (typeof req.body[key] === 'string') {
+        req.body[key] = sanitizeHtml(req.body[key], {
+          allowedTags: [], // No HTML tags allowed
+          allowedAttributes: {} // No attributes allowed
+        }).trim();
+      }
+    }
+  }
+  
+  // Sanitize query parameters
+  if (req.query) {
+    for (const key in req.query) {
+      if (typeof req.query[key] === 'string') {
+        req.query[key] = sanitizeHtml(req.query[key], {
+          allowedTags: [],
+          allowedAttributes: {}
+        }).trim();
+      }
+    }
+  }
+  
+  next();
+};
+
+// Apply sanitization middleware globally
+app.use(sanitizeInput);
+// block access to admin routes for non-admin users
+
+const checkBlocked = (req, res, next) => {
+  if (req.session.user?.is_blocked) {
+    req.session.destroy();
+    return res.render('auth/login', {
+      error: 'Your account has been blocked. Please contact support.'
+    });
+  }
+  next();
+};
+
+// Apply to all authenticated routes
+app.use(['/profile', '/products', '/messages'], checkBlocked);
+app.use(express.static("public"));
+// Static files
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
+// Set view engine
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'ejs');
+
+
+const upload = multer({ 
+  dest: 'public/uploads/',
+  limits: { 
+    fileSize: 5 * 1024 * 1024, // 5MB per file
+    files: 3 // Maximum 3 files
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'), false);
+    }
+  }
+});
+
+// Authentication middleware
+const isAuthenticated = (req, res, next) => {
+  if (req.session.user) {
+    next();
+  } else {
+    req.session.returnTo = req.originalUrl;
+    res.redirect('/auth/login');
+  }
+};
+
+// Admin middleware
+const isAdmin = (req, res, next) => {
+  // Check if admin session exists
+  if (!req.session.admin) {
+    return res.redirect('/admin/login');
+  }
+  
+  // Additional role checks if needed
+  if (req.path.startsWith('/admin/super') && req.session.admin.role !== 'super') {
+    return res.status(403).send('Access denied');
+  }
+  
+  return next();
+};
+
+// Product ID validation middleware (updated)
+const validateProductId = (req, res, next) => {
+  const productId = req.params.id;
+  
+  if (!productId || !/^\d+$/.test(productId)) {
+    return res.status(400).render('error', {
+      user: req.session.user,
+      status: 400,
+      message: 'Invalid product ID format',
+      showSearch: true
+    });
+  }
+  
+  req.productId = parseInt(productId, 10);
+  next();
+};
+
+// Product ownership validation middleware
+const validateProductOwner = async (req, res, next) => {
+  try {
+    const [products] = await db.query(
+      'SELECT * FROM products WHERE id = ? AND user_id = ?',
+      [req.productId, req.session.user?.id]
+    );
+    
+    if (products.length === 0) {
+      return res.status(404).render('error', {
+        user: req.session.user,
+        status: 404,
+        message: 'Product not found or you don\'t have permission',
+        showSearch: true
+      });
+    }
+    
+    req.product = products[0];
+    next();
+  } catch (error) {
+    console.error('Product validation error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Server error during product validation'
+    });
+  }
+};
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(`ERROR (${err.statusCode || 500}): ${err.message}`);
+  
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Something went wrong!';
+  
+  res.status(statusCode).render('error', {
+    title: `Error ${statusCode}`,
+    status: statusCode,
+    message: message,
+    user: req.session.user || null,
+    showSearch: statusCode === 404
+  });
+});
+// 
+const validateIdParam = (paramName) => {
+  return (req, res, next) => {
+    const id = req.params[paramName];
+    if (!id || !/^\d+$/.test(id)) {
+      return res.status(400).json({ error: `Invalid ${paramName} format` });
+    }
+    next();
+  };
+};
+
+// 
+const validateFileUpload = (req, res, next) => {
+  if (!req.file && !req.files) {
+    return res.status(400).json({ error: 'No files were uploaded' });
+  }
+  
+  // Check file types
+  const files = req.file ? [req.file] : req.files;
+  for (const file of files) {
+    if (!file.mimetype.startsWith('image/')) {
+      return res.status(400).json({ error: 'Only image files are allowed' });
+    }
+  }
+  
+  next();
+};
+// Enhanced password validation middleware
+const validatePassword = (req, res, next) => {
+  const password = req.body.password;
+  const errors = passwordSchema.validate(password, { list: true });
+
+  if (errors.length > 0) {
+    const errorMessages = {
+      min: 'Password must be at least 10 characters',
+      max: 'Password must be less than 100 characters',
+      uppercase: 'Password must contain uppercase letters',
+      lowercase: 'Password must contain lowercase letters',
+      digits: 'Password must contain numbers',
+      symbols: 'Password must contain special characters',
+      spaces: 'Password must not contain spaces'
+    };
+
+    const messages = errors.map(err => errorMessages[err]);
+    return res.status(400).render('auth/register', {
+      error: messages.join(', '),
+      formData: req.body
+    });
+  }
+
+  next();
+};
+
+// 
+// Routes
+app.get('/security-headers', (req, res) => {
+  const headers = res.getHeaders();
+  res.json({
+    csp: headers['content-security-policy'],
+    hsts: headers['strict-transport-security'],
+    xss: headers['x-xss-protection'],
+    frameOptions: headers['x-frame-options'],
+    contentType: headers['x-content-type-options'],
+    referrerPolicy: headers['referrer-policy']
+  });
+});
+// Home page with pagination
+app.get('/', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 8; // 9 products per page
+    const offset = (page - 1) * limit;
+
+    // Get total count of products
+    const [countResult] = await db.query(
+      'SELECT COUNT(*) as total FROM products WHERE is_active = TRUE'
+    );
+    const totalProducts = countResult[0].total;
+    const totalPages = Math.ceil(totalProducts / limit);
+
+    // Get paginated products
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name 
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.is_active = TRUE
+      ORDER BY p.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [limit, offset]);
+    
+    res.render('home', { 
+      user: req.session.user || null,
+      products: products || [],
+      searchQuery: null,
+      selectedCategory: null,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      message: null,
+      pagination: {
+        page,
+        limit,
+        totalPages,
+        totalProducts
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Search products with pagination
+app.get('/search', async (req, res) => {
+  const { q, category, page = 1 } = req.query;
+  const limit = 9;
+  const offset = (page - 1) * limit;
+  
+  let baseQuery = `
+    SELECT p.*, u.name as user_name 
+    FROM products p
+    JOIN users u ON p.user_id = u.id
+    WHERE p.is_active = TRUE
+  `;
+  
+  let countQuery = `
+    SELECT COUNT(*) as total 
+    FROM products p
+    WHERE p.is_active = TRUE
+  `;
+  
+  const params = [];
+  const countParams = [];
+
+  if (q) {
+    baseQuery += ' AND (p.title LIKE ? OR p.description LIKE ?)';
+    countQuery += ' AND (p.title LIKE ? OR p.description LIKE ?)';
+    params.push(`%${q}%`, `%${q}%`);
+    countParams.push(`%${q}%`, `%${q}%`);
+  }
+
+  if (category) {
+    baseQuery += ' AND p.category = ?';
+    countQuery += ' AND p.category = ?';
+    params.push(category);
+    countParams.push(category);
+  }
+
+  baseQuery += ' ORDER BY p.created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
+
+  try {
+    const [[count]] = await db.query(countQuery, countParams);
+    const totalPages = Math.ceil(count.total / limit);
+    
+    const [products] = await db.query(baseQuery, params);
+    
+    res.render('home', { 
+      user: req.session.user || null,
+      products,
+      searchQuery: q,
+      selectedCategory: category,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      message: null,
+      pagination: {
+        page: parseInt(page),
+        limit,
+        totalPages,
+        totalProducts: count.total
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Product Creation Routes (should come before ID routes)
+app.get('/products/create', isAuthenticated, async (req, res) => {
+  try {
+    if (!req.session.user.plan_id) {
+      req.session.message = {
+        type: 'warning',
+        text: 'Please select a plan before posting products'
+      };
+      return res.redirect('/plans/select');
+    }
+
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    if (count[0].count >= req.session.user.product_limit) {
+      req.session.message = {
+        type: 'danger',
+        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
+      };
+      return res.redirect('/profile');
+    }
+
+    res.render('products/create', {
+      user: req.session.user,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      message: req.session.message || null
+    });
+
+    delete req.session.message;
+  } catch (error) {
+    console.error('Product create page error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Error loading product creation page'
+    });
+  }
+});
+
+app.post('/products/create', 
+  isAuthenticated, 
+  upload.array('images', 3), // Handle up to 3 files with field name 'images'
+  async (req, res) => {
+    try {
+      if (!req.session.user.plan_id) {
+        req.session.message = { type: 'danger', text: 'Please select a plan before posting products' };
+        return res.redirect('/plans/select');
+      }
+
+      // Get count of approved products (not pending ones)
+      const [count] = await db.query(
+        'SELECT COUNT(*) as count FROM products WHERE user_id = ? AND is_approved = TRUE',
+        [req.session.user.id]
+      );
+      
+      if (count[0].count >= req.session.user.product_limit) {
+        req.session.message = { 
+          type: 'warning', 
+          text: `You've reached your limit of ${req.session.user.product_limit} approved products. Please upgrade your plan.`
+        };
+        return res.redirect('/profile');
+      }
+
+      const { title, description, price, category } = req.body;
+      
+      if (!title || !description || !price || !category || !req.files || req.files.length === 0) {
+        req.session.message = { type: 'danger', text: 'All required fields are missing' };
+        return res.redirect('/products/create');
+      }
+
+      // Get the filenames of uploaded images
+      const images = req.files.map(file => file.filename);
+      
+      // Insert product with first image as primary and set approval status to false
+      const [result] = await db.query(
+        `INSERT INTO products 
+         (user_id, title, description, price, image, category, additional_images, is_active, is_approved) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, FALSE, FALSE)`,
+        [
+          req.session.user.id, 
+          title, 
+          description, 
+          parseFloat(price), 
+          images[0], // Primary image
+          category,
+          JSON.stringify(images.slice(1)), // Store additional images as JSON array
+          // is_active: FALSE - product won't be publicly visible
+          // is_approved: FALSE - needs admin approval
+        ]
+      );
+      
+      req.session.message = { 
+        type: 'success', 
+        text: 'Product submitted for approval! It will be visible after admin review.' 
+      };
+      return res.redirect('/profile');
+      
+    } catch (error) {
+      console.error('Product creation error:', error);
+      
+      // Clean up uploaded files if error occurs
+      if (req.files) {
+        req.files.forEach(file => {
+          const filePath = path.join(__dirname, 'public', 'uploads', file.filename);
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        });
+      }
+      
+      req.session.message = { type: 'danger', text: 'Error creating product. Please try again.' };
+      return res.redirect('/products/create');
+    }
+  }
+);
+// In your product show route
+app.get('/products/:id', validateProductId, validateIdParam('id'), async (req, res) => {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name, u.email as user_email, u.phone as user_phone
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.id = ? AND p.is_active = TRUE
+    `, [req.productId]);
+
+    if (products.length === 0) {
+      return res.status(404).render('error', {
+        user: req.session.user,
+        status: 404,
+        message: 'Product not found or has been removed',
+        showSearch: true
+      });
+    }
+
+    const product = products[0];
+    // Parse additional images if they exist
+    product.additionalImages = product.additional_images ? JSON.parse(product.additional_images) : [];
+
+    res.render('products/show', { 
+      user: req.session.user,
+      product: product,
+      similarProducts: await getSimilarProducts(product.category, product.id)
+    });
+  } catch (error) {
+    console.error('Product view error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Server error while loading product'
+    });
+  }
+});
+
+app.get('/products/:id/edit', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  async (req, res) => {
+    res.render('products/edit', { 
+      user: req.session.user,
+      product: req.product,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others']
+    });
+  }
+);
+
+app.post('/products/:id/update', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  upload.single('image'), 
+  async (req, res) => {
+    const { title, description, price, category } = req.body;
+    
+    try {
+      const updateData = {
+        title,
+        description,
+        price: parseFloat(price),
+        category
+      };
+      
+      if (req.file) {
+        const oldImage = path.join(__dirname, 'public', 'uploads', req.product.image);
+        if (fs.existsSync(oldImage)) {
+          fs.unlinkSync(oldImage);
+        }
+        updateData.image = req.file.filename;
+      }
+      
+      await db.query(
+        'UPDATE products SET ? WHERE id = ?',
+        [updateData, req.productId]
+      );
+      
+      req.session.message = {
+        type: 'success',
+        text: 'Product updated successfully'
+      };
+      res.redirect('/profile');
+    } catch (error) {
+      console.error(error);
+      req.session.message = {
+        type: 'danger',
+        text: 'Error updating product'
+      };
+      res.redirect(`/products/${req.productId}/edit`);
+    }
+  }
+);
+
+app.post('/products/:id/delete', isAuthenticated, async (req, res) => {
+  try {
+    // Verify product ownership first
+    const [product] = await db.query(
+      'SELECT * FROM products WHERE id = ? AND user_id = ?',
+      [req.params.id, req.session.user.id]
+    );
+    
+    if (!product[0]) {
+      req.session.message = { type: 'danger', text: 'Product not found or unauthorized' };
+      return res.redirect('/profile');
+    }
+    
+    // First delete dependent messages
+    await db.query('DELETE FROM messages WHERE product_id = ?', [req.params.id]);
+    
+    // Then delete the product
+    await db.query('DELETE FROM products WHERE id = ?', [req.params.id]);
+    
+    // Delete associated images
+    if (product[0].image) {
+      const imagePath = path.join(__dirname, 'public', 'uploads', product[0].image);
+      if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+    }
+    
+    // Delete additional images if they exist
+    if (product[0].additional_images) {
+      const additionalImages = JSON.parse(product[0].additional_images);
+      additionalImages.forEach(image => {
+        const imgPath = path.join(__dirname, 'public', 'uploads', image);
+        if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+      });
+    }
+    
+    // Return JSON response for AJAX or redirect for normal form submission
+    if (req.headers.accept && req.headers.accept.includes('application/json')) {
+      return res.json({ success: true });
+    }
+    
+    req.session.message = { type: 'success', text: 'Product deleted successfully' };
+    return res.redirect('/profile');
+    
+  } catch (error) {
+    console.error('Product deletion error:', error);
+    
+    if (req.headers.accept && req.headers.accept.includes('application/json')) {
+      return res.status(500).json({ 
+        success: false, 
+        message: error.code === 'ER_ROW_IS_REFERENCED_2' 
+          ? 'Please delete related messages first' 
+          : 'Error deleting product' 
+      });
+    }
+    
+    req.session.message = { 
+      type: 'danger', 
+      text: error.code === 'ER_ROW_IS_REFERENCED_2' 
+        ? 'Cannot delete product with active messages' 
+        : 'Error deleting product' 
+    };
+    return res.redirect('/profile');
+  }
+});
+
+// Create Razorpay order
+app.post('/plans/create-order', isAuthenticated, async (req, res) => {
+  try {
+    const { plan_id } = req.body;
+    
+    // Get plan details
+    const [plan] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    if (!plan[0]) {
+      return res.status(400).json({ error: 'Invalid plan selected' });
+    }
+    
+    // Create order (implement your actual Razorpay order creation)
+    const order = {
+      id: 'order_' + Math.random().toString(36).substr(2, 9),
+      amount: plan[0].price * 100, // Amount in paise
+      currency: 'INR'
+    };
+    
+    res.json(order);
+    
+  } catch (error) {
+    console.error('Order creation error:', error);
+    res.status(500).json({ error: 'Error creating order' });
+  }
+});
+// Verify payment
+app.post('/verify-payment', isAuthenticated, async (req, res) => {
+  try {
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, plan_id } = req.body;
+
+    // 1. Validate required fields
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing payment verification fields' 
+      });
+    }
+
+    // 2. Create expected signature
+    const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
+    hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
+    const generated_signature = hmac.digest('hex');
+
+    // 3. Verify signature
+    if (generated_signature !== razorpay_signature) {
+      console.error('Signature verification failed', {
+        received: razorpay_signature,
+        generated: generated_signature
+      });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Payment verification failed - invalid signature' 
+      });
+    }
+
+    // 4. Get plan details
+    const [plan] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    if (!plan.length) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid plan selected' 
+      });
+    }
+
+    // 5. Update database
+    await db.query(
+      'UPDATE users SET plan_id = ?, product_limit = ? WHERE id = ?',
+      [plan_id, plan[0].max_products, req.session.user.id]
+    );
+
+    // 6. Update session
+    req.session.user.plan_id = plan_id;
+    req.session.user.product_limit = plan[0].max_products;
+
+    res.json({ 
+      success: true,
+      message: 'Payment verified and plan updated'
+    });
+
+  } catch (error) {
+    console.error('Payment verification error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error during payment verification' 
+    });
+  }
+});
+
+// Helper function to get similar products
+async function getSimilarProducts(category, excludeId) {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name 
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.category = ? AND p.id != ? AND p.is_active = TRUE
+      ORDER BY p.created_at DESC
+      LIMIT 4
+    `, [category, excludeId]);
+    return products;
+  } catch (error) {
+    console.error('Error fetching similar products:', error);
+    return [];
+  }
+}
+
+// change plan
+// Add this route to handle plan change validation
+app.post('/plans/change', isAuthenticated, async (req, res) => {
+  try {
+    const { plan_id } = req.body;
+    
+    // Get the new plan details
+    const [newPlan] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    if (!newPlan[0]) {
+      return res.status(400).json({ error: 'Invalid plan selected' });
+    }
+    
+    // Get current product count
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    const productCount = count[0].count;
+    
+    // Validate against new plan limit
+    if (productCount > newPlan[0].max_products) {
+      return res.status(400).json({ 
+        error: `You have ${productCount} products but the new plan only allows ${newPlan[0].max_products}. 
+                Please delete ${productCount - newPlan[0].max_products} products before downgrading.` 
+      });
+    }
+    
+    // If validation passes, proceed with payment/plan change
+    // ... your existing payment processing code ...
+    
+  } catch (error) {
+    console.error('Plan change error:', error);
+    res.status(500).json({ error: 'Error processing plan change' });
+  }
+});
+
+// Add these new routes:
+
+// Validate plan change before payment
+app.post('/plans/validate-change', isAuthenticated, async (req, res) => {
+  try {
+    const { plan_id } = req.body;
+    const userId = req.session.user.id;
+    
+    // Get current product count
+    const [productCount] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [userId]
+    );
+    
+    // Get new plan details
+    const [newPlan] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    
+    if (!newPlan[0]) {
+      return res.json({ valid: false, message: 'Invalid plan selected' });
+    }
+    
+    // Check if already on this plan
+    if (req.session.user.plan_id === parseInt(plan_id)) {
+      return res.json({ valid: false, message: 'You already have this plan' });
+    }
+    
+    // Check product limit
+    if (productCount[0].count > newPlan[0].max_products) {
+      return res.json({ 
+        valid: false,
+        message: `You have ${productCount[0].count} products but the new plan only allows ${newPlan[0].max_products}. Please delete ${productCount[0].count - newPlan[0].max_products} products first.`
+      });
+    }
+    
+    res.json({ valid: true });
+    
+  } catch (error) {
+    console.error('Validation error:', error);
+    res.status(500).json({ valid: false, message: 'Error validating plan change' });
+  }
+});
+
+// Create Razorpay Order
+app.post('/plans/create-order', isAuthenticated, async (req, res) => {
+  try {
+    const { plan_id } = req.body;
+    
+    // Get plan details
+    const [plan] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    if (!plan[0]) {
+      return res.status(400).json({ error: 'Invalid plan selected' });
+    }
+    
+    // Create order (implement your actual Razorpay order creation)
+    const order = {
+      id: 'order_' + Math.random().toString(36).substr(2, 9),
+      amount: plan[0].price * 100, // Amount in paise
+      currency: 'INR'
+    };
+    
+    res.json(order);
+    
+  } catch (error) {
+    console.error('Order creation error:', error);
+    res.status(500).json({ error: 'Error creating order' });
+  }
+});
+
+// Verify Payment
+app.post('/plans/verify-payment', isAuthenticated, async (req, res) => {
+  try {
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, plan_id, max_products } = req.body;
+    
+    // Implement your actual Razorpay verification here
+    const isValid = true; // Replace with actual verification
+    
+    if (!isValid) {
+      return res.status(400).json({ success: false, message: 'Payment verification failed' });
+    }
+    
+    // Update user's plan
+    await db.query('UPDATE users SET plan_id = ?, product_limit = ? WHERE id = ?', [
+      plan_id,
+      max_products,
+      req.session.user.id
+    ]);
+    
+    // Update session
+    req.session.user.plan_id = plan_id;
+    req.session.user.product_limit = max_products;
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Payment verification error:', error);
+    res.status(500).json({ success: false, message: 'Error verifying payment' });
+  }
+});
+// Handle actual plan change after payment
+app.post('/plans/process-change', isAuthenticated, async (req, res) => {
+  try {
+    const { plan_id, payment_id } = req.body;
+    const userId = req.session.user.id;
+    
+    // Verify payment (pseudo-code)
+    const paymentValid = await verifyPayment(payment_id);
+    
+    if (!paymentValid) {
+      return res.status(400).json({ success: false, message: 'Payment verification failed' });
+    }
+    
+    // Update user's plan
+    await db.query('UPDATE users SET plan_id = ?, product_limit = ? WHERE id = ?', [
+      plan_id,
+      req.body.max_products, // Should be passed from client
+      userId
+    ]);
+    
+    // Update session
+    req.session.user.plan_id = plan_id;
+    req.session.user.product_limit = req.body.max_products;
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Plan change error:', error);
+    res.status(500).json({ success: false, message: 'Error processing plan change' });
+  }
+});
+
+// Helper function to create Razorpay order
+async function createRazorpayOrder(amount, description) {
+  // Implementation depends on your Razorpay integration
+  // This is just a placeholder
+  return {
+    id: 'order_' + Math.random().toString(36).substr(2, 9),
+    amount: amount * 100, // Razorpay uses paise
+    currency: 'INR'
+  };
+}
+// admin login
+
+// Admin Login Route
+app.get('/admin/login', (req, res) => {
+ if (req.session.admin) return res.redirect('/admin/dashboard');
+  res.render('admin/login', { 
+    error: null,
+    success: req.query.registered ? 'Registration successful! Please login.' : null
+  });
+});
+app.post('/admin/login',[
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 6 })
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.render('admin/login', { 
+      error: 'Invalid input format',
+      validationErrors: errors.array() 
+    });
+  }
+  const { email, password } = req.body;
+  
+  try {
+    const [admins] = await db.query(
+      'SELECT * FROM admins WHERE email = ? AND is_active = TRUE',
+      [email]
+    );
+    
+    if (admins.length === 0) {
+      return res.render('admin/login', { error: 'Invalid credentials' });
+    }
+
+    const admin = admins[0];
+    const match = await bcrypt.compare(password, admin.password);
+
+    if (!match) {
+      return res.render('admin/login', { error: 'Invalid credentials' });
+    }
+
+    req.session.admin = {
+      id: admin.id,
+      name: admin.name,
+      email: admin.email,
+      role: admin.role
+    };
+
+    // Save session before redirect
+    req.session.save(() => {
+      res.redirect('/admin/dashboard');
+    });
+  } catch (error) {
+    console.error('Admin login error:', error);
+    res.render('admin/login', { error: 'Server error' });
+  }
+});
+
+// Admin Logout
+app.get('/admin/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/admin/login');
+});
+
+// Login page
+app.get('/auth/login', (req, res) => {
+  if (req.session.user) {
+    return res.redirect('/');
+  }
+  res.render('auth/login', { error: null });
+});
+
+// Login handler
+app.post('/auth/login', [
+  body('email').isEmail().withMessage('Please enter a valid email').normalizeEmail(),
+  body('password').isLength({ min: 1 }).withMessage('Password is required')
+], async (req, res) => {
+  const ip = req.ip;
+  const now = Date.now();
+  const errors = validationResult(req);
+  
+  // Check if IP is locked out
+  if (failedAttempts.has(ip) && failedAttempts.get(ip).count >= MAX_FAILED_ATTEMPTS) {
+    const lockoutTime = failedAttempts.get(ip).time;
+    if (now - lockoutTime < LOCKOUT_TIME) {
+      const remainingTime = Math.ceil((LOCKOUT_TIME - (now - lockoutTime)) / 60000);
+      securityLogStream.write(`[SECURITY] IP ${ip} locked out - attempted login during lockout period\n`);
+      return res.render('auth/login', { 
+        error: `Account temporarily locked. Try again in ${remainingTime} minutes.`
+      });
+    }
+    // Lockout period expired
+    failedAttempts.delete(ip);
+  }
+
+  if (!errors.isEmpty()) {
+    securityLogStream.write(`[VALIDATION FAILED] Login attempt with invalid email format from IP: ${ip}\n`);
+    return res.render('auth/login', { 
+      error: errors.array()[0].msg
+    });
+  }
+
+  const { email, password } = req.body;
+
+  try {
+    // Log login attempt
+    securityLogStream.write(`[LOGIN ATTEMPT] Email: ${email} from IP: ${ip}\n`);
+
+    const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      recordFailedAttempt(ip);
+      securityLogStream.write(`[FAILED LOGIN] Invalid email: ${email} from IP: ${ip}\n`);
+      return res.render('auth/login', { 
+        error: 'Invalid email or password',
+        remainingAttempts: MAX_FAILED_ATTEMPTS - (failedAttempts.get(ip)?.count || 0)
+      });
+    }
+
+    const user = users[0];
+    
+    // Check if account is blocked
+    if (user.is_blocked) {
+      securityLogStream.write(`[BLOCKED ACCOUNT] Attempt to access blocked account: ${email}\n`);
+      return res.render('auth/login', { 
+        error: 'Your account has been blocked. Please contact support.'
+      });
+    }
+
+    // Verify password with timing-safe comparison
+    const match = await bcrypt.compare(password, user.password);
+
+    if (!match) {
+      recordFailedAttempt(ip);
+      const remaining = MAX_FAILED_ATTEMPTS - failedAttempts.get(ip).count;
+      securityLogStream.write(`[FAILED LOGIN] Invalid password for: ${email} from IP: ${ip}\n`);
+      
+      return res.render('auth/login', { 
+        error: `Invalid email or password${remaining > 0 ? ` (${remaining} attempts remaining)` : ''}`,
+        remainingAttempts: remaining
+      });
+    }
+
+    // Successful login - reset failed attempts
+    failedAttempts.delete(ip);
+    
+    // Create new session with enhanced security
+    req.session.regenerate((err) => {
+      if (err) {
+        securityLogStream.write(`[SESSION ERROR] ${err.message}\n`);
+        return res.status(500).render('error', {
+          status: 500,
+          message: 'Session creation failed'
+        });
+      }
+
+      req.session.user = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        plan_id: user.plan_id,
+        product_limit: user.product_limit,
+        is_admin: user.is_admin,
+        is_blocked: user.is_blocked,
+        loginTime: new Date(),
+        userAgent: req.get('User-Agent'),
+        ipAddress: ip
+      };
+
+      // Log successful login
+      securityLogStream.write(`[SUCCESSFUL LOGIN] User: ${user.email} from IP: ${ip}\n`);
+
+      const redirectTo = req.session.returnTo || '/';
+      delete req.session.returnTo;
+      
+      // Set secure session cookie
+      res.cookie('session', req.sessionID, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+      });
+
+      res.redirect(redirectTo);
+    });
+
+  } catch (error) {
+    securityLogStream.write(`[LOGIN ERROR] ${error.stack || error.message}\n`);
+    console.error('Login error:', error);
+    res.status(500).render('error', {
+      status: 500,
+      message: 'An unexpected error occurred during login'
+    });
+  }
+});
+
+// Helper function to record failed attempts
+/**
+ * Records failed login attempts and implements account lockout
+ * @param {string} ip - IP address of the client
+ * @param {string} [email] - Optional email for user-specific tracking
+ */
+async function recordFailedAttempt(ip, email = 'unknown') {
+  const now = Date.now();
+  const lockoutKey = `lockout:${ip}`;
+  const attemptKey = `attempts:${ip}`;
+
+  try {
+    // In production, use Redis for distributed tracking
+    if (process.env.NODE_ENV === 'production' && redisClient) {
+      // Increment attempt count with Redis
+      const attempts = await redisClient.incr(attemptKey);
+      
+      // Set expiration if this is the first attempt
+      if (attempts === 1) {
+        await redisClient.expire(attemptKey, LOCKOUT_TIME / 1000);
+      }
+
+      // Log every failed attempt
+      securityLogStream.write(`[FAILED ATTEMPT] IP: ${ip} | Email: ${email} | Attempt: ${attempts}\n`);
+
+      // If reached max attempts, set lockout
+      if (attempts >= MAX_FAILED_ATTEMPTS) {
+        await redisClient.setex(lockoutKey, LOCKOUT_TIME / 1000, 'locked');
+        securityLogStream.write(`[ACCOUNT LOCKED] IP: ${ip} | Email: ${email}\n`);
+        
+        // Optionally send security alert
+        if (process.env.SECURITY_ALERT_WEBHOOK) {
+          sendSecurityAlert(ip, email, attempts);
+        }
+      }
+    } 
+    // In development, use in-memory tracking
+    else {
+      if (!failedAttempts.has(ip)) {
+        failedAttempts.set(ip, { 
+          count: 1, 
+          time: now,
+          emails: new Set([email])
+        });
+      } else {
+        const attempt = failedAttempts.get(ip);
+        attempt.count += 1;
+        attempt.time = now;
+        attempt.emails.add(email);
+
+        // Log every failed attempt after the first one
+        if (attempt.count > 1) {
+          securityLogStream.write(
+            `[FAILED ATTEMPT] IP: ${ip} | ` +
+            `Emails: ${Array.from(attempt.emails).join(', ')} | ` +
+            `Attempt: ${attempt.count}\n`
+          );
+        }
+      }
+
+      // Log when account is locked
+      if (failedAttempts.get(ip)?.count >= MAX_FAILED_ATTEMPTS) {
+        securityLogStream.write(
+          `[ACCOUNT LOCKED] IP: ${ip} | ` +
+          `Emails: ${Array.from(failedAttempts.get(ip).emails).join(', ')}\n`
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Failed attempt recording error:', error);
+    securityLogStream.write(`[ERROR] Failed to record attempt: ${error.message}\n`);
+  }
+}
+
+// Helper function to send security alerts (example implementation)
+async function sendSecurityAlert(ip, email, attempts) {
+  try {
+    const response = await fetch(process.env.SECURITY_ALERT_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: `⚠️ Security Alert: Multiple failed login attempts\n` +
+              `• IP: ${ip}\n` +
+              `• Email: ${email || 'unknown'}\n` +
+              `• Attempts: ${attempts}\n` +
+              `• Time: ${new Date().toISOString()}`
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Webhook failed with status ${response.status}`);
+    }
+  } catch (error) {
+    securityLogStream.write(`[ALERT ERROR] Failed to send security alert: ${error.message}\n`);
+  }
+}
+
+// Helper function to check if an IP is currently locked out
+async function isIpLockedOut(ip) {
+  try {
+    if (process.env.NODE_ENV === 'production' && redisClient) {
+      const locked = await redisClient.exists(`lockout:${ip}`);
+      return locked === 1;
+    }
+    return failedAttempts.has(ip) && 
+           failedAttempts.get(ip).count >= MAX_FAILED_ATTEMPTS &&
+           Date.now() - failedAttempts.get(ip).time < LOCKOUT_TIME;
+  } catch (error) {
+    securityLogStream.write(`[LOCKOUT CHECK ERROR] ${error.message}\n`);
+    return false; // Fail open to avoid blocking legitimate users
+  }
+}
+
+// Helper function to get remaining attempts
+async function getRemainingAttempts(ip) {
+  try {
+    if (process.env.NODE_ENV === 'production' && redisClient) {
+      const attempts = await redisClient.get(`attempts:${ip}`);
+      return MAX_FAILED_ATTEMPTS - (parseInt(attempts) || 0);
+    }
+    return MAX_FAILED_ATTEMPTS - (failedAttempts.get(ip)?.count || 0);
+  } catch (error) {
+    securityLogStream.write(`[ATTEMPT COUNT ERROR] ${error.message}\n`);
+    return MAX_FAILED_ATTEMPTS; // Return max to avoid revealing system state
+  }
+}
+
+// Register page
+app.get('/auth/register', (req, res) => {
+  if (req.session.user) {
+    return res.redirect('/');
+  }
+  res.render('auth/register', { error: null });
+});
+
+// chat message
+// Add this route to your app.js
+app.get('/api/messages', isAuthenticated, async (req, res) => {
+  try {
+    const { productId, otherUserId } = req.query;
+    const currentUserId = req.session.user.id;
+
+    const [messages] = await db.query(`
+      SELECT m.*, u.name as sender_name 
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE product_id = ? AND (
+        (sender_id = ? AND receiver_id = ?) OR 
+        (sender_id = ? AND receiver_id = ?)
+      )
+      ORDER BY created_at ASC
+    `, [productId, currentUserId, otherUserId, otherUserId, currentUserId]);
+
+    res.json(messages);
+  } catch (error) {
+    console.error('Error fetching messages:', error);
+    res.status(500).json({ error: 'Failed to load messages' });
+  }
+});
+// inbox message
+// Get all conversations for the current user
+app.get('/messages', isAuthenticated, async (req, res) => {
+  try {
+    const userId = req.session.user.id;
+    
+    // Get distinct conversations (grouped by product and other user)
+    const [conversations] = await db.query(`
+      SELECT 
+        p.id as product_id,
+        p.title as product_title,
+        p.image as product_image,
+        p.price as product_price,
+        u.id as other_user_id,
+        u.name as other_user_name,
+        MAX(m.created_at) as last_message_time,
+        (
+          SELECT message 
+          FROM messages 
+          WHERE (
+            (sender_id = ? AND receiver_id = u.id AND product_id = p.id) OR
+            (sender_id = u.id AND receiver_id = ? AND product_id = p.id)
+          )
+          ORDER BY created_at DESC 
+          LIMIT 1
+        ) as last_message,
+        SUM(CASE WHEN m.receiver_id = ? AND m.is_read = FALSE THEN 1 ELSE 0 END) as unread_count
+      FROM messages m
+      JOIN products p ON m.product_id = p.id
+      JOIN users u ON (u.id = CASE 
+        WHEN m.sender_id = ? THEN m.receiver_id 
+        ELSE m.sender_id 
+      END)
+      WHERE m.sender_id = ? OR m.receiver_id = ?
+      GROUP BY p.id, u.id
+      ORDER BY last_message_time DESC
+    `, [userId, userId, userId, userId, userId, userId]);
+
+    res.render('messages/inbox', {
+      user: req.session.user,
+      conversations,
+      activeTab: 'inbox'
+    });
+  } catch (error) {
+    console.error('Error fetching conversations:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Failed to load messages'
+    });
+  }
+});
+
+// Mark messages as read
+app.post('/messages/mark-as-read', isAuthenticated, async (req, res) => {
+  try {
+    const { productId, senderId } = req.body;
+    await db.query(
+      'UPDATE messages SET is_read = TRUE WHERE product_id = ? AND sender_id = ? AND receiver_id = ?',
+      [productId, senderId, req.session.user.id]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error marking messages as read:', error);
+    res.status(500).json({ success: false });
+  }
+});
+
+// Get specific conversation
+app.get('/messages/:productId/:userId', isAuthenticated, async (req, res) => {
+  try {
+    const { productId, userId } = req.params;
+    const currentUserId = req.session.user.id;
+    
+    // Get product details
+    const [products] = await db.query('SELECT * FROM products WHERE id = ?', [productId]);
+    if (products.length === 0) {
+      return res.status(404).render('error', {
+        user: req.session.user,
+        status: 404,
+        message: 'Product not found'
+      });
+    }
+    
+    // Get other user details
+    const [users] = await db.query('SELECT id, name FROM users WHERE id = ?', [userId]);
+    if (users.length === 0) {
+      return res.status(404).render('error', {
+        user: req.session.user,
+        status: 404,
+        message: 'User not found'
+      });
+    }
+    
+    // Get messages
+    const [messages] = await db.query(`
+      SELECT m.*, u.name as sender_name 
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE product_id = ? AND (
+        (sender_id = ? AND receiver_id = ?) OR 
+        (sender_id = ? AND receiver_id = ?)
+      )
+      ORDER BY created_at ASC
+    `, [productId, currentUserId, userId, userId, currentUserId]);
+    
+    res.render('messages/conversation', {
+      user: req.session.user,
+      product: products[0],
+      otherUser: users[0],
+      messages
+    });
+  } catch (error) {
+    console.error('Error fetching conversation:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Failed to load conversation'
+    });
+  }
+});
+
+// Register handler
+app.post('/auth/register', [
+  body('name').isLength({ min: 2, max: 50 }).escape(),
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('confirm_password').custom((value, { req }) => {
+    if (value !== req.body.password) {
+      throw new Error('Passwords do not match');
+    }
+    return true;
+  })
+], validatePassword , async (req, res) => {
+ const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.render('auth/register', { 
+      error: errors.array()[0].msg,
+      formData: req.body 
+    });
+  }
+  const { name, email, password, confirm_password } = req.body;
+
+  if (password !== confirm_password) {
+    return res.render('auth/register', { error: 'Passwords do not match' });
+  }
+
+  try {
+    const [existingUsers] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+    
+    if (existingUsers.length > 0) {
+      return res.render('auth/register', { error: 'Email already registered' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    await db.query(
+      'INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
+      [name, email, hashedPassword]
+    );
+
+    res.redirect('/auth/login');
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Logout
+app.get('/auth/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/');
+});
+
+
+app.get('/profile', isAuthenticated, async (req, res) => {
+  try {
+    const userId = req.session.user.id;
+    
+    // Get user's approved products (visible to public)
+    const [approvedProducts] = await db.query(
+      'SELECT * FROM products WHERE user_id = ? AND is_approved = TRUE ORDER BY created_at DESC',
+      [userId]
+    );
+    
+    // Get user's pending products (only visible to owner)
+    const [pendingProducts] = await db.query(
+      'SELECT * FROM products WHERE user_id = ? AND is_approved = FALSE ORDER BY created_at DESC',
+      [userId]
+    );
+    
+    // Get available plans
+    const [plans] = await db.query('SELECT * FROM plans');
+    
+    // Get unread message count
+    const [unreadResult] = await db.query(
+      'SELECT COUNT(*) as unreadCount FROM messages WHERE receiver_id = ? AND is_read = FALSE',
+      [userId]
+    );
+    const unreadCount = unreadResult[0].unreadCount || 0;
+    
+    // Calculate product limits
+    const productCount = approvedProducts.length;
+    const productLimit = req.session.user.product_limit || 0;
+    const remainingSlots = Math.max(0, productLimit - productCount);
+    
+    res.render('profile', {
+      user: req.session.user,
+      approvedProducts,
+      pendingProducts,
+      plans,
+      message: req.session.message,
+      unreadCount,
+      productCount,
+      productLimit,
+      remainingSlots
+    });
+    
+    delete req.session.message;
+  } catch (error) {
+    console.error('Profile error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Error loading profile'
+    });
+  }
+});
+
+// Plan Selection
+app.get('/plans/select', isAuthenticated, async (req, res) => {
+  try {
+    if (req.session.user.plan_id) {
+      return res.redirect('/profile');
+    }
+    
+    const [plans] = await db.query('SELECT * FROM plans');
+    
+    // Get count of existing products (if any)
+    const [productCount] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    res.render('plans/select', { 
+      plans, 
+      user: req.session.user,
+      existingProducts: productCount[0].count || 0
+    });
+    
+  } catch (error) {
+    console.error('Plan selection error:', error);
+    res.status(500).render('error', {
+      user: req.session.user,
+      status: 500,
+      message: 'Error loading plan selection'
+    });
+  }
+});
+// Razorpay Integration
+
+// Create Razorpay order
+app.post('/create-razorpay-order', isAuthenticated, async (req, res) => {
+  try {
+    console.log('Creating order for plan:', req.body.plan_id);
+    
+    const [plan] = await db.query('SELECT * FROM plans WHERE id = ?', [req.body.plan_id]);
+    if (!plan.length) {
+      console.error('Plan not found');
+      return res.status(400).json({ error: 'Invalid plan' });
+    }
+
+    const amount = plan[0].price * 100; // Convert to paise
+    console.log('Order amount:', amount);
+
+    const order = await razorpay.orders.create({
+      amount: amount,
+      currency: 'INR',
+      receipt: `order_${Date.now()}`
+    });
+
+    console.log('Order created:', order.id);
+    res.json(order);
+
+  } catch (error) {
+    console.error('Order creation failed:', error);
+    res.status(500).json({ error: 'Failed to create order' });
+  }
+});
+// Verify payment and update plan
+app.post('/verify-payment', isAuthenticated, async (req, res) => {
+  try {
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, plan_id } = req.body;
+
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature || !plan_id) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing payment verification fields' 
+      });
+    }
+
+    const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET);
+    hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
+    const generated_signature = hmac.digest('hex');
+
+    if (generated_signature !== razorpay_signature) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Payment verification failed - invalid signature' 
+      });
+    }
+
+    const [plans] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    if (plans.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid plan selected' 
+      });
+    }
+
+    const plan = plans[0];
+    
+    await db.query(
+      'UPDATE users SET plan_id = ?, product_limit = ? WHERE id = ?',
+      [plan.id, plan.max_products, req.session.user.id]
+    );
+
+    await db.query(
+      'INSERT INTO payments (user_id, plan_id, amount, razorpay_payment_id, razorpay_order_id) VALUES (?, ?, ?, ?, ?)',
+      [req.session.user.id, plan.id, plan.price, razorpay_payment_id, razorpay_order_id]
+    );
+
+    req.session.user.plan_id = plan.id;
+    req.session.user.product_limit = plan.max_products;
+
+    return res.json({ 
+      success: true,
+      plan_name: plan.name,
+      product_limit: plan.max_products,
+      redirectUrl: '/profile'
+    });
+
+  } catch (error) {
+    console.error('Payment verification error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error during payment verification'
+    });
+  }
+});
+
+// Product Management
+
+// Remove product ID validation from create routes
+app.get('/products/create', isAuthenticated, async (req, res) => {
+  try {
+    if (!req.session.user.plan_id) {
+      req.session.message = { type: 'warning', text: 'Please select a plan first' };
+      return res.redirect('/plans/select');
+    }
+
+    const [productCount] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    if (productCount[0].count >= req.session.user.product_limit) {
+      req.session.message = { 
+        type: 'danger', 
+        text: `You've reached your limit of ${req.session.user.product_limit} products. 
+              Please upgrade your plan or delete some products.`
+      };
+      return res.redirect('/profile');
+    }
+
+    res.render('products/create', {
+      user: req.session.user,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      message: req.session.message
+    });
+    
+    delete req.session.message;
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).render('error', { message: 'Error loading product creation page' });
+  }
+});
+
+// Add this with your other routes
+app.get('/users/:id/phone', isAuthenticated, validateIdParam('id'),async (req, res) => {
+  try {
+    const [users] = await db.query(
+      'SELECT phone FROM users WHERE id = ?',
+      [req.params.id]
+    );
+    
+    if (users.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.json({ phone: users[0].phone });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/products/create', isAuthenticated, upload.single('image'),[
+    body('title').isLength({ min: 5, max: 100 }).escape(),
+    body('description').isLength({ min: 10, max: 1000 }).escape(),
+    body('price').isFloat({ min: 0.01 }),
+    body('category').isIn(['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'])
+  ], async (req, res) => {
+     const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      // Clean up uploaded files if validation fails
+      if (req.files) {
+        req.files.forEach(file => {
+          const filePath = path.join(__dirname, 'public', 'uploads', file.filename);
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+          }
+        });
+      }
+      
+      return res.render('products/create', {
+        user: req.session.user,
+        categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+        error: errors.array()[0].msg
+      });
+    }
+  try {
+    if (!req.session.user.plan_id) {
+      req.session.message = { type: 'danger', text: 'Please select a plan before posting products' };
+      return res.redirect('/plans/select');
+    }
+
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [req.session.user.id]
+    );
+    
+    if (count[0].count >= req.session.user.product_limit) {
+      req.session.message = { 
+        type: 'warning', 
+        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
+      };
+      return res.redirect('/profile');
+    }
+
+    const { title, description, price, category } = req.body;
+    if (!title || !description || !price || !category || !req.file) {
+      req.session.message = { type: 'danger', text: 'All fields are required' };
+      return res.redirect('/products/create');
+    }
+
+    const [result] = await db.query(
+      'INSERT INTO products (user_id, title, description, price, image, category) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.session.user.id, title, description, parseFloat(price), req.file.filename, category]
+    );
+    
+    req.session.message = { type: 'success', text: 'Product posted successfully!' };
+    return res.redirect('/profile');
+    
+  } catch (error) {
+    console.error('Product creation error:', error);
+    req.session.message = { type: 'danger', text: 'Error creating product. Please try again.' };
+    return res.redirect('/products/create');
+  }
+});
+
+// Edit product page
+app.get('/products/:id/edit', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  async (req, res) => {
+    res.render('products/edit', { 
+      user: req.session.user,
+      product: req.product,
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others']
+    });
+  }
+);
+
+// Update product handler
+app.post('/products/:id/update', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  upload.single('image'), 
+   [
+    body('title').isLength({ min: 5, max: 100 }).escape(),
+    body('description').isLength({ min: 10, max: 1000 }).escape(),
+    body('price').isFloat({ min: 0.01 }),
+    body('category').isIn(['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'])
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      // Clean up uploaded file if validation fails
+      if (req.file) {
+        const filePath = path.join(__dirname, 'public', 'uploads', req.file.filename);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+      
+      return res.render('products/edit', {
+        user: req.session.user,
+        product: req.product,
+        categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+        error: errors.array()[0].msg
+      });
+    }
+    const { title, description, price, category } = req.body;
+    
+    try {
+      const updateData = {
+        title,
+        description,
+        price: parseFloat(price),
+        category
+      };
+      
+      if (req.file) {
+        const oldImage = path.join(__dirname, 'public', 'uploads', req.product.image);
+        if (fs.existsSync(oldImage)) {
+          fs.unlinkSync(oldImage);
+        }
+        updateData.image = req.file.filename;
+      }
+      
+      await db.query(
+        'UPDATE products SET ? WHERE id = ?',
+        [updateData, req.productId]
+      );
+      
+      req.session.message = {
+        type: 'success',
+        text: 'Product updated successfully'
+      };
+      res.redirect('/profile');
+    } catch (error) {
+      console.error(error);
+      req.session.message = {
+        type: 'danger',
+        text: 'Error updating product'
+      };
+      res.redirect(`/products/${req.productId}/edit`);
+    }
+  }
+);
+
+// Delete product
+app.post('/products/:id/delete', 
+  isAuthenticated, 
+  validateProductId, 
+  validateProductOwner, 
+  async (req, res) => {
+    try {
+      const imagePath = path.join(__dirname, 'public', 'uploads', req.product.image);
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+      
+      await db.query('DELETE FROM products WHERE id = ?', [req.productId]);
+      
+      req.session.message = {
+        type: 'success',
+        text: 'Product deleted successfully'
+      };
+      res.redirect('/profile');
+    } catch (error) {
+      console.error(error);
+      req.session.message = {
+        type: 'danger',
+        text: 'Error deleting product'
+      };
+      res.redirect('/profile');
+    }
+  }
+);
+
+// Admin Routes
+
+// Admin dashboard
+app.get('/admin/dashboard', isAdmin, async (req, res) => {
+  try {
+    // Get basic counts with fallbacks
+    const getCount = async (query, fallback = 0) => {
+      try {
+        const [result] = await db.query(query);
+        return result[0]?.count || fallback;
+      } catch (error) {
+        console.error(`Query failed: ${query}`, error);
+        return fallback;
+      }
+    };
+
+    // Get all counts in parallel
+    const [
+      usersCount,
+      activeProductsCount,
+      pendingApprovalsCount,
+      transactionsCount,
+      reportedItemsCount
+    ] = await Promise.all([
+      getCount('SELECT COUNT(*) as count FROM users'),
+      getCount('SELECT COUNT(*) as count FROM products WHERE is_active = TRUE'),
+      getCount('SELECT COUNT(*) as count FROM products WHERE is_approved = FALSE'),
+      getCount('SELECT COUNT(*) as count FROM transactions'),
+      getCount('SELECT COUNT(*) as count FROM reported_items WHERE status = "pending"')
+    ]);
+
+    // Get chart data (last 30 days)
+    const getChartData = async (table) => {
+      try {
+        const [data] = await db.query(`
+          SELECT DATE(created_at) as date, COUNT(*) as count 
+          FROM ${table}
+          WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+          GROUP BY DATE(created_at)
+          ORDER BY date
+        `);
+        return data;
+      } catch (error) {
+        console.error(`Failed to get chart data for ${table}`, error);
+        return [];
+      }
+    };
+
+    const charts = {
+      users: await getChartData('users'),
+      products: await getChartData('products')
+    };
+
+    res.render('admin/dashboard', {
+      admin: req.session.admin,
+      counts: {
+        users: usersCount,
+        activeProducts: activeProductsCount,
+        pendingApprovals: pendingApprovalsCount,
+        transactions: transactionsCount,
+        reportedItems: reportedItemsCount
+      },
+      charts
+    });
+
+  } catch (error) {
+    console.error('Dashboard error:', error);
+    res.status(500).render('admin/error', {
+      status: 500,
+      message: 'Failed to load dashboard data',
+      error: process.env.NODE_ENV === 'development' ? error : null
+    });
+  }
+});
+
+// Admin - List users
+// List Users
+app.get('/admin/users', isAdmin, async (req, res) => {
+  try {
+    const [users] = await db.query(`
+      SELECT u.*, COUNT(p.id) as product_count 
+      FROM users u
+      LEFT JOIN products p ON p.user_id = u.id
+      GROUP BY u.id
+      ORDER BY u.created_at DESC
+    `);
+    
+    res.render('admin/users/list', { 
+      admin: req.session.admin,
+      users,
+      activePage: 'users'  // This highlights the active menu item
+    });
+  } catch (error) {
+    console.error('Users list error:', error);
+    res.status(500).render('admin/error', {
+      status: 500,
+      message: 'Failed to load users',
+      admin: req.session.admin
+    });
+  }
+});
+// Block/Unblock User
+app.post('/admin/users/:id/toggle-status', isAdmin, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE users SET is_active = NOT is_active WHERE id = ?',
+      [req.params.id]
+    );
+    res.redirect('/admin/users');
+  } catch (error) {
+    console.error('Toggle user status error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+
+// View User's Products
+app.get('/admin/users/:id/products', isAdmin, async (req, res) => {
+  try {
+    // Get user and products in a single query
+    const [results] = await db.query(`
+      SELECT 
+        p.*, 
+        u.name as user_name,
+        u.email as user_email
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.user_id = ?
+      ORDER BY p.created_at DESC
+    `, [req.params.id]);
+
+    if (results.length === 0) {
+      // If no products, still get user info
+      const [users] = await db.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
+      if (users.length === 0) {
+        return res.status(404).render('admin/error', {
+          status: 404,
+          message: 'User not found'
+        });
+      }
+      return res.render('admin/users/products', {
+        admin: req.session.admin,
+        user: users[0],
+        products: []
+      });
+    }
+
+    res.render('admin/users/products', {
+      admin: req.session.admin,
+      user: {
+        id: req.params.id,
+        name: results[0].user_name,
+        email: results[0].user_email
+      },
+      products: results
+    });
+  } catch (error) {
+    console.error('User products error:', error);
+    res.status(500).render('admin/error', {
+      status: 500,
+      message: 'Failed to load user products'
+    });
+  }
+});
+
+// Approve/Reject Product
+// Approve product
+app.post('/admin/products/:id/approve', isAdmin, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE products SET is_approved = TRUE, is_active = TRUE WHERE id = ?',
+      [req.params.id]
+    );
+    res.redirect('/admin/products/pending?success=Product+approved+successfully');
+  } catch (error) {
+    console.error('Approve product error:', error);
+    res.redirect('/admin/products/pending?error=Failed+to+approve+product');
+  }
+});
+
+// Reject product
+app.post('/admin/products/:id/reject', isAdmin, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE products SET is_approved = FALSE, is_active = FALSE WHERE id = ?',
+      [req.params.id]
+    );
+    res.redirect('/admin/products/pending?success=Product+rejected+successfully');
+  } catch (error) {
+    console.error('Reject product error:', error);
+    res.redirect('/admin/products/pending?error=Failed+to+reject+product');
+  }
+});
+
+// Pending Products
+// Admin product approval routes
+app.get('/admin/products/pending', isAdmin, async (req, res) => {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name, u.email as user_email
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.is_approved = FALSE
+      ORDER BY p.created_at DESC
+    `);
+    
+    res.render('admin/products/pending', {
+      admin: req.session.admin,
+      products: products || [],
+      success: req.query.success,
+      error: req.query.error
+    });
+  } catch (error) {
+    console.error('Pending products error:', error);
+    res.status(500).render('admin/error', {
+      status: 500,
+      message: 'Failed to load pending products'
+    });
+  }
+});
+
+// Flagged Products
+app.get('/admin/products/flagged', isAdmin, async (req, res) => {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name, COUNT(r.id) as report_count
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      JOIN reports r ON r.product_id = p.id
+      WHERE p.is_active = TRUE
+      GROUP BY p.id
+      HAVING report_count > 0
+      ORDER BY report_count DESC
+    `);
+    
+    res.render('admin/products/flagged', { 
+      admin: req.session.admin,
+      products 
+    });
+  } catch (error) {
+    console.error('Flagged products error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+app.get('/admin/reports', isAdmin, async (req, res) => {
+  try {
+    const [reports] = await db.query(`
+      SELECT r.*, p.title as product_title, u.name as reporter_name
+      FROM reports r
+      JOIN products p ON r.product_id = p.id
+      JOIN users u ON r.reporter_id = u.id
+      WHERE r.status = 'pending'
+      ORDER BY r.created_at DESC
+    `);
+    
+    res.render('admin/reports/list', { 
+      admin: req.session.admin,
+      reports 
+    });
+  } catch (error) {
+    console.error('Reports error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+
+app.post('/admin/reports/:id/resolve', isAdmin, async (req, res) => {
+  try {
+    const { action } = req.body;
+    
+    await db.query(
+      'UPDATE reports SET status = ? WHERE id = ?',
+      [action, req.params.id]
+    );
+    
+    if (action === 'remove') {
+      await db.query(
+        'UPDATE products SET is_active = FALSE WHERE id = (SELECT product_id FROM reports WHERE id = ?)',
+        [req.params.id]
+      );
+    }
+    
+    res.redirect('/admin/reports');
+  } catch (error) {
+    console.error('Resolve report error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+app.get('/admin/transactions', isAdmin, async (req, res) => {
+  try {
+    const [transactions] = await db.query(`
+      SELECT t.*, 
+        p.title as product_title,
+        u1.name as buyer_name,
+        u2.name as seller_name
+      FROM transactions t
+      JOIN products p ON t.product_id = p.id
+      JOIN users u1 ON t.buyer_id = u1.id
+      JOIN users u2 ON t.seller_id = u2.id
+      ORDER BY t.created_at DESC
+    `);
+    
+    // Calculate totals
+    const [[total]] = await db.query(
+      'SELECT SUM(amount) as total FROM transactions'
+    );
+    
+    res.render('admin/transactions/list', { 
+      admin: req.session.admin,
+      transactions,
+      total: total.total || 0
+    });
+  } catch (error) {
+    console.error('Transactions error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+app.get('/admin/feedback', isAdmin, async (req, res) => {
+  try {
+    const [feedback] = await db.query(`
+      SELECT f.*, 
+        p.title as product_title,
+        u1.name as reviewer_name,
+        u2.name as seller_name
+      FROM feedback f
+      JOIN products p ON f.product_id = p.id
+      JOIN users u1 ON f.reviewer_id = u1.id
+      JOIN users u2 ON p.user_id = u2.id
+      ORDER BY f.created_at DESC
+    `);
+    
+    res.render('admin/feedback/list', { 
+      admin: req.session.admin,
+      feedback 
+    });
+  } catch (error) {
+    console.error('Feedback error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+
+app.post('/admin/feedback/:id/block', isAdmin, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE feedback SET is_blocked = TRUE WHERE id = ?',
+      [req.params.id]
+    );
+    
+    res.redirect('/admin/feedback');
+  } catch (error) {
+    console.error('Block feedback error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+// block user
+// Block user
+app.post('/admin/users/:id/block', isAdmin, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    
+    await db.query(
+      'UPDATE users SET is_blocked = TRUE, blocked_reason = ?, blocked_at = NOW() WHERE id = ?',
+      [reason, req.params.id]
+    );
+    
+    // Destroy the user's session if they're currently logged in
+    await destroyUserSessions(req.params.id);
+    
+    req.session.message = {
+      type: 'success',
+      text: 'User blocked successfully'
+    };
+    res.redirect('/admin/users');
+    
+  } catch (error) {
+    console.error('Block user error:', error);
+    req.session.message = {
+      type: 'danger',
+      text: 'Failed to block user'
+    };
+    res.redirect('/admin/users');
+  }
+});
+
+// Unblock user
+app.post('/admin/users/:id/unblock', isAdmin, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE users SET is_blocked = FALSE, blocked_reason = NULL, blocked_at = NULL WHERE id = ?',
+      [req.params.id]
+    );
+    
+    req.session.message = {
+      type: 'success',
+      text: 'User unblocked successfully'
+    };
+    res.redirect('/admin/users');
+    
+  } catch (error) {
+    console.error('Unblock user error:', error);
+    req.session.message = {
+      type: 'danger',
+      text: 'Failed to unblock user'
+    };
+    res.redirect('/admin/users');
+  }
+});
+
+// Helper function to destroy all sessions for a user
+async function destroyUserSessions(userId) {
+  // Implement session destruction logic here
+  // This depends on your session store (Redis, database, etc.)
+}
+
+app.get('/admin/categories', isAdmin, async (req, res) => {
+  try {
+    const [categories] = await db.query(`
+      SELECT c.*, 
+        COUNT(p.id) as product_count,
+        (SELECT COUNT(*) FROM categories WHERE parent_id = c.id) as subcategory_count
+      FROM categories c
+      LEFT JOIN products p ON p.category_id = c.id
+      WHERE c.parent_id IS NULL
+      GROUP BY c.id
+      ORDER BY c.name
+    `);
+    
+    res.render('admin/categories/list', { 
+      admin: req.session.admin,
+      categories 
+    });
+  } catch (error) {
+    console.error('Categories error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+
+app.post('/admin/categories', isAdmin, categoryUpload.single('image'), async (req, res) => {
+  try {
+    const { name, parent_id } = req.body;
+    
+    await db.query(
+      'INSERT INTO categories (name, parent_id, image) VALUES (?, ?, ?)',
+      [name, parent_id || null, req.file?.filename]
+    );
+    
+    res.redirect('/admin/categories');
+  } catch (error) {
+    console.error('Create category error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+app.get('/admin/settings', isAdmin, async (req, res) => {
+  try {
+    const [admin] = await db.query(
+      'SELECT * FROM admins WHERE id = ?',
+      [req.session.admin.id]
+    );
+    
+    res.render('admin/settings/index', { 
+      admin: { ...req.session.admin, ...admin[0] } 
+    });
+  } catch (error) {
+    console.error('Settings error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+
+app.post('/admin/settings/change-password', isAdmin, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    
+    const [admin] = await db.query(
+      'SELECT password FROM admins WHERE id = ?',
+      [req.session.admin.id]
+    );
+    
+    const match = await bcrypt.compare(current_password, admin[0].password);
+    if (!match) {
+      return res.render('admin/settings/index', {
+        admin: req.session.admin,
+        error: 'Current password is incorrect'
+      });
+    }
+    
+    const hashedPassword = await bcrypt.hash(new_password, 10);
+    await db.query(
+      'UPDATE admins SET password = ? WHERE id = ?',
+      [hashedPassword, req.session.admin.id]
+    );
+    
+    res.render('admin/settings/index', {
+      admin: req.session.admin,
+      success: 'Password changed successfully'
+    });
+  } catch (error) {
+    console.error('Change password error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+app.get('/admin/tickets', isAdmin, async (req, res) => {
+  try {
+    const [tickets] = await db.query(`
+      SELECT t.*, u.name as user_name
+      FROM tickets t
+      JOIN users u ON t.user_id = u.id
+      WHERE t.status != 'closed'
+      ORDER BY t.created_at DESC
+    `);
+    
+    res.render('admin/tickets/list', { 
+      admin: req.session.admin,
+      tickets 
+    });
+  } catch (error) {
+    console.error('Tickets error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+
+app.post('/admin/tickets/:id/reply', isAdmin, async (req, res) => {
+  try {
+    const { reply } = req.body;
+    
+    await db.query(
+      'UPDATE tickets SET reply = ?, status = "replied", replied_at = NOW() WHERE id = ?',
+      [reply, req.params.id]
+    );
+    
+    res.redirect('/admin/tickets');
+  } catch (error) {
+    console.error('Ticket reply error:', error);
+    res.status(500).render('admin/error', { admin: req.session.admin });
+  }
+});
+// Admin - List products
+app.get('/admin/products', isAdmin, async (req, res) => {
+  try {
+    const [products] = await db.query(`
+      SELECT p.*, u.name as user_name, u.email as user_email
+      FROM products p
+      JOIN users u ON p.user_id = u.id
+      ORDER BY p.created_at DESC
+    `);
+    
+    res.render('admin/products', {
+      user: req.session.user,
+      products
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Admin - Toggle product status
+app.post('/admin/products/:id/toggle-status', isAdmin, validateProductId, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE products SET is_active = NOT is_active WHERE id = ?',
+      [req.productId]
+    );
+    res.redirect('/admin/products');
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+app.post('/admin/products/:id/toggle', isAdmin, validateProductId, async (req, res) => {
+  try {
+    await db.query(
+      'UPDATE products SET is_active = NOT is_active WHERE id = ?',
+      [req.productId]
+    );
+    res.redirect('/admin/products');
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Admin - Delete product
+app.post('/admin/products/:id/delete', isAdmin, validateProductId, async (req, res) => {
+  try {
+    const [products] = await db.query('SELECT * FROM products WHERE id = ?', [req.productId]);
+    
+    if (products.length > 0) {
+      const imagePath = path.join(__dirname, 'public', 'uploads', products[0].image);
+      if (fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+    }
+    
+    await db.query('DELETE FROM products WHERE id = ?', [req.productId]);
+    
+    res.redirect('/admin/products');
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Server error');
+  }
+});
+
+// Admin Registration Routes
+app.get('/admin/register', (req, res) => {
+  if (req.session.admin) return res.redirect('/admin/dashboard');
+  res.render('admin/register', { 
+    error: null,
+    formData: { name: '', email: '' } // Initialize empty formData
+  });
+});
+
+app.post('/admin/register',[
+  body('name').isLength({ min: 2, max: 50 }).escape(),
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('confirm_password').custom((value, { req }) => {
+    if (value !== req.body.password) {
+      throw new Error('Passwords do not match');
+    }
+    return true;
+  }),
+  body('secret_key').equals(process.env.ADMIN_REGISTER_KEY).withMessage('Invalid registration key')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.render('admin/register', { 
+      error: errors.array()[0].msg,
+      formData: req.body 
+    });
+  }
+  const { name, email, password, confirm_password, secret_key } = req.body;
+  
+  if (password !== confirm_password) {
+    return res.render('admin/register', { 
+      error: 'Passwords do not match',
+      formData: { name, email } // Pass back the submitted data
+    });
+  }
+
+  if (secret_key !== process.env.ADMIN_REGISTER_KEY) {
+    return res.render('admin/register', { 
+      error: 'Invalid registration key',
+      formData: { name, email } // Pass back the submitted data
+    });
+  }
+
+  try {
+    const [existingAdmins] = await db.query(
+      'SELECT id FROM admins WHERE email = ?', 
+      [email]
+    );
+    
+    if (existingAdmins.length > 0) {
+      return res.render('admin/register', { 
+        error: 'Admin with this email already exists',
+        formData: { name, email } // Pass back the submitted data
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    await db.query(
+      'INSERT INTO admins (name, email, password, role) VALUES (?, ?, ?, ?)',
+      [name, email, hashedPassword, 'moderator']
+    );
+
+    res.redirect('/admin/login?registered=true');
+  } catch (error) {
+    console.error('Admin registration error:', error);
+    res.render('admin/register', { 
+      error: 'Registration failed. Please try again.',
+      formData: { name, email } // Pass back the submitted data
+    });
+  }
+});
+
+// One-time setup route (remove after first use)
+app.get('/setup-first-admin', async (req, res) => {
+  const [admins] = await db.query('SELECT id FROM admins');
+  if (admins.length > 0) return res.send('Admin already exists');
+  
+  const hashedPassword = await bcrypt.hash('admin123', 10);
+  console.log(hashedPassword);
+  await db.query(
+    'INSERT INTO admins (name, email, password, role) VALUES (?, ?, ?, ?)',
+    ['Super Admin', 'superadmin@example.com', hashedPassword, 'super']
+  );
+  
+  res.send('First admin created: superadmin@example.com / admin123');
+});
+// middleware to handle 404 errors
+
+// Error handling middleware (should be near the end of app.js, before the server starts)
+app.use((err, req, res, next) => {
+  console.error(`ERROR (${err.statusCode || 500}): ${err.message}`);
+  
+  const statusCode = err.statusCode || 500;
+  const message = err.message || 'Something went wrong!';
+  
+  res.status(statusCode).render('error', {
+    title: `Error ${statusCode}`,
+    status: statusCode,
+    message: message,
+    user: req.session.user || null,
+    showSearch: statusCode === 404
+  });
+});
+
+// products rating
+// Add to your existing routes
+app.post('/api/ratings', isAuthenticated, [
+  body('productId').isInt(),
+  body('rating').isInt({ min: 1, max: 5 }),
+  body('comment').optional().isLength({ max: 500 }).escape()
+], async (req, res) => {
+   const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ error: 'Invalid rating data' });
+  }
+  try {
+    const { productId, rating, comment } = req.body;
+    const userId = req.session.user.id;
+
+    // Validate rating (1-5)
+    if (![1, 2, 3, 4, 5].includes(parseInt(rating))) {
+      return res.status(400).json({ error: 'Invalid rating value' });
+    }
+
+    // Check if user already rated this product
+    const [existing] = await db.query(
+      'SELECT * FROM ratings WHERE user_id = ? AND product_id = ?',
+      [userId, productId]
+    );
+
+    if (existing.length > 0) {
+      // Update existing rating
+      await db.query(
+        'UPDATE ratings SET rating = ?, comment = ?, updated_at = NOW() WHERE id = ?',
+        [rating, comment, existing[0].id]
+      );
+    } else {
+      // Create new rating
+      await db.query(
+        'INSERT INTO ratings (user_id, product_id, rating, comment) VALUES (?, ?, ?, ?)',
+        [userId, productId, rating, comment]
+      );
+    }
+
+    // Emit rating update to all connected clients
+    const [updatedRatings] = await db.query(`
+      SELECT r.*, u.name as user_name 
+      FROM ratings r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.product_id = ?
+      ORDER BY r.created_at DESC
+    `, [productId]);
+
+    const [avgResult] = await db.query(`
+      SELECT AVG(rating) as average, COUNT(*) as count 
+      FROM ratings 
+      WHERE product_id = ?
+    `, [productId]);
+
+    io.emit('ratingUpdate', {
+      productId,
+      ratings: updatedRatings,
+      average: parseFloat(avgResult[0].average).toFixed(1),
+      count: avgResult[0].count
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Rating error:', error);
+    res.status(500).json({ error: 'Failed to submit rating' });
+  }
+});
+
+app.get('/api/ratings/:productId', async (req, res) => {
+  try {
+    const { productId } = req.params;
+
+    const [ratings] = await db.query(`
+      SELECT r.*, u.name as user_name 
+      FROM ratings r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.product_id = ?
+      ORDER BY r.created_at DESC
+    `, [productId]);
+
+    const [avgResult] = await db.query(`
+      SELECT AVG(rating) as average, COUNT(*) as count 
+      FROM ratings 
+      WHERE product_id = ?
+    `, [productId]);
+
+
+
+    res.json({
+      ratings,
+      average: parseFloat(avgResult[0].average).toFixed(1),
+      count: avgResult[0].count
+    });
+  } catch (error) {
+    console.error('Get ratings error:', error);
+    res.status(500).json({ error: 'Failed to get ratings' });
+  }
+});
+
+// Start server
+// Start server with security checks
+function startServer() {
+  // Verify required environment variables
+  const requiredEnvVars = ['SESSION_SECRET', 'DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+  const missingVars = requiredEnvVars.filter(v => !process.env[v]);
+  
+  if (missingVars.length > 0) {
+    console.error('Missing required environment variables:', missingVars.join(', '));
+    process.exit(1);
+  }
+
+  // Verify password policy
+  if (!passwordSchema.validate('Sample1@Password')) {
+    console.error('Password policy validation failed');
+    process.exit(1);
+  }
+
+  server.listen(port, () => {
+    console.log(`Server running securely on port ${port}`);
+    securityLogStream.write(`[SERVER START] ${new Date().toISOString()}\n`);
+  });
+}
+
+startServer();

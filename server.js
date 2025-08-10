@@ -107,10 +107,9 @@ app.use(session({
 
 // After session middleware
 app.use(cookieParser());
-
-// CSRF middleware setup
+app.use(csrf({ cookie: true }));
 const csrfProtection = csrf({ cookie: true });
-app.use(csrfProtection);
+// app.use(csrfProtection);
 
 // Make CSRF token available to all views
 app.use((req, res, next) => {
@@ -157,12 +156,21 @@ const upload = multer({
 
 // Authentication middleware
 const isAuthenticated = (req, res, next) => {
-  if (req.session.user) {
-    next();
-  } else {
+  // 1. Session exists check
+  if (!req.session.user) {
     req.session.returnTo = req.originalUrl;
-    res.redirect('/auth/login');
+    return res.redirect('/auth/login');
   }
+
+  // 2. Blocked user check (if applicable)
+  if (req.session.user.is_blocked) {
+    req.session.destroy();
+    return res.redirect('/auth/login?error=blocked');
+  }
+
+  // Attach user to request
+  req.user = req.session.user;
+  next();
 };
 
 // Admin middleware
@@ -354,7 +362,7 @@ app.get('/search', async (req, res) => {
 });
 
 // Product Creation Routes (should come before ID routes)
-app.get('/products/create', isAuthenticated, csrfProtection ,  async (req, res) => {
+app.get('/products/create', isAuthenticated, async (req, res) => {
   try {
     if (!req.session.user.plan_id) {
       req.session.message = {
@@ -378,10 +386,11 @@ app.get('/products/create', isAuthenticated, csrfProtection ,  async (req, res) 
     }
 
     res.render('products/create', {
-      user: req.session.user,
-      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
-      message: req.session.message || null
-    });
+    user: req.session.user,
+    categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+    message : null,
+    csrfToken: req.csrfToken() // Explicitly pass CSRF token
+  });
 
     delete req.session.message;
   } catch (error) {
@@ -394,78 +403,33 @@ app.get('/products/create', isAuthenticated, csrfProtection ,  async (req, res) 
   }
 });
 
-app.post('/products/create', 
-  isAuthenticated, 
-  csrfProtection,
-  upload.array('images', 3), // Handle up to 3 files with field name 'images'
-  async (req, res) => {
-    try {
-      if (!req.session.user.plan_id) {
-        req.session.message = { type: 'danger', text: 'Please select a plan before posting products' };
-        return res.redirect('/plans/select');
-      }
-
-      const [count] = await db.query(
-        'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
-        [req.session.user.id]
-      );
-      
-      if (count[0].count >= req.session.user.product_limit) {
-        req.session.message = { 
-          type: 'warning', 
-          text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
-        };
-        return res.redirect('/profile');
-      }
-
-      const { title, description, price, category } = req.body;
-      
-      if (!title || !description || !price || !category || !req.files || req.files.length === 0) {
-        req.session.message = { type: 'danger', text: 'All required fields are missing' };
-        return res.redirect('/products/create');
-      }
-
-      // Get the filenames of uploaded images
-      const images = req.files.map(file => file.filename);
-      
-      // Insert product with first image as primary
-      const [result] = await db.query(
-        'INSERT INTO products (user_id, title, description, price, image, category, additional_images) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [
-          req.session.user.id, 
-          title, 
-          description, 
-          parseFloat(price), 
-          images[0], // Primary image
-          category,
-          JSON.stringify(images.slice(1)) // Store additional images as JSON array
-        ]
-      );
-      
-      req.session.message = { type: 'success', text: 'Product posted successfully!' };
-      return res.redirect('/profile');
-      
-    } catch (error) {
-      console.error('Product creation error:', error);
-      
-      // Clean up uploaded files if error occurs
-      if (req.files) {
-        req.files.forEach(file => {
-          const filePath = path.join(__dirname, 'public', 'uploads', file.filename);
-          if (fs.existsSync(filePath)) {
-            fs.unlinkSync(filePath);
-          }
-        });
-      }
-      
-      req.session.message = { type: 'danger', text: 'Error creating product. Please try again.' };
-      return res.redirect('/products/create');
-    }
-  }
-);
+// (req, res, next) => {
+     // Manually verify CSRF token for multipart forms
+//     if (!req.headers['x-csrf-token'] && !req.body._csrf) {
+//       return res.status(403).send('Invalid CSRF token');
+//     }
+//     next();
+//   },
 
 // In your product show route
-app.get('/products/:id', validateProductId, async (req, res) => {
+const getSimilarProducts = async (category, excludeProductId) => {
+  try {
+    const [similar] = await db.query(`
+      SELECT id, title, price, image, created_at 
+      FROM products 
+      WHERE category = ? AND id != ? AND is_active = TRUE 
+      ORDER BY created_at DESC 
+      LIMIT 6
+    `, [category, excludeProductId]);
+
+    return similar;
+  } catch (error) {
+    console.error('Error fetching similar products:', error);
+    return []; // Return empty array on failure
+  }
+}
+
+app.get('/products/:id', validateProductId, csrfProtection , async (req, res) => {
   try {
     const [products] = await db.query(`
       SELECT p.*, u.name as user_name, u.email as user_email, u.phone as user_phone
@@ -497,7 +461,8 @@ app.get('/products/:id', validateProductId, async (req, res) => {
     res.status(500).render('error', {
       user: req.session.user,
       status: 500,
-      message: 'Server error while loading product'
+      message: 'Server error while loading product',
+      showSearch: false
     });
   }
 });
@@ -506,11 +471,15 @@ app.get('/products/:id/edit',
   isAuthenticated, 
   validateProductId, 
   validateProductOwner, 
+  csrfProtection ,
   async (req, res) => {
     res.render('products/edit', { 
       user: req.session.user,
       product: req.product,
-      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others']
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      csrfToken: req.csrfToken() // Explicitly pass CSRF token
+      // csrfToken: req.csrfToken() // Explicitly pass CSRF token
+
     });
   }
 );
@@ -519,6 +488,7 @@ app.post('/products/:id/update',
   isAuthenticated, 
   validateProductId, 
   validateProductOwner, 
+  csrfProtection , 
   upload.single('image'), 
   async (req, res) => {
     const { title, description, price, category } = req.body;
@@ -553,59 +523,14 @@ app.post('/products/:id/update',
       console.error(error);
       req.session.message = {
         type: 'danger',
-        text: 'Error updating product'
+        text: 'Error updating product',
+
       };
       res.redirect(`/products/${req.productId}/edit`);
     }
   }
 );
 
-app.post('/products/:id/delete', 
-  isAuthenticated, 
-  validateProductId, 
-  validateProductOwner, 
-  async (req, res) => {
-    try {
-      const imagePath = path.join(__dirname, 'public', 'uploads', req.product.image);
-      if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-      }
-      
-      await db.query('DELETE FROM products WHERE id = ?', [req.productId]);
-      
-      req.session.message = {
-        type: 'success',
-        text: 'Product deleted successfully'
-      };
-      res.redirect('/profile');
-    } catch (error) {
-      console.error(error);
-      req.session.message = {
-        type: 'danger',
-        text: 'Error deleting product'
-      };
-      res.redirect('/profile');
-    }
-  }
-);
-
-// Helper function to get similar products
-async function getSimilarProducts(category, excludeId) {
-  try {
-    const [products] = await db.query(`
-      SELECT p.*, u.name as user_name 
-      FROM products p
-      JOIN users u ON p.user_id = u.id
-      WHERE p.category = ? AND p.id != ? AND p.is_active = TRUE
-      ORDER BY p.created_at DESC
-      LIMIT 4
-    `, [category, excludeId]);
-    return products;
-  } catch (error) {
-    console.error('Error fetching similar products:', error);
-    return [];
-  }
-}
 
 // admin login
 
@@ -661,7 +586,7 @@ app.get('/admin/logout', (req, res) => {
 });
 
 // Login page
-app.get('/auth/login', (req, res) => {
+app.get('/auth/login', csrfProtection , (req, res) => {
   if (req.session.user) {
     return res.redirect('/');
   }
@@ -669,7 +594,7 @@ app.get('/auth/login', (req, res) => {
 });
 
 // Login handler
-app.post('/auth/login', async (req, res) => {
+app.post('/auth/login', csrfProtection , async (req, res) => {
   const { email, password } = req.body;
 
   try {
@@ -707,7 +632,7 @@ app.post('/auth/login', async (req, res) => {
 });
 
 // Register page
-app.get('/auth/register', (req, res) => {
+app.get('/auth/register', csrfProtection , (req, res) => {
   if (req.session.user) {
     return res.redirect('/');
   }
@@ -716,7 +641,7 @@ app.get('/auth/register', (req, res) => {
 
 // chat message
 // Add this route to your app.js
-app.get('/api/messages', isAuthenticated, async (req, res) => {
+app.get('/api/messages', isAuthenticated, csrfProtection , async (req, res) => {
   try {
     const { productId, otherUserId } = req.query;
     const currentUserId = req.session.user.id;
@@ -740,7 +665,7 @@ app.get('/api/messages', isAuthenticated, async (req, res) => {
 });
 // inbox message
 // Get all conversations for the current user
-app.get('/messages', isAuthenticated, async (req, res) => {
+app.get('/messages', isAuthenticated, csrfProtection , async (req, res) => {
   try {
     const userId = req.session.user.id;
     
@@ -792,7 +717,7 @@ app.get('/messages', isAuthenticated, async (req, res) => {
 });
 
 // Mark messages as read
-app.post('/messages/mark-as-read', isAuthenticated, async (req, res) => {
+app.post('/messages/mark-as-read', isAuthenticated, csrfProtection , async (req, res) => {
   try {
     const { productId, senderId } = req.body;
     await db.query(
@@ -807,7 +732,7 @@ app.post('/messages/mark-as-read', isAuthenticated, async (req, res) => {
 });
 
 // Get specific conversation
-app.get('/messages/:productId/:userId', isAuthenticated, async (req, res) => {
+app.get('/messages/:productId/:userId', isAuthenticated, csrfProtection , async (req, res) => {
   try {
     const { productId, userId } = req.params;
     const currentUserId = req.session.user.id;
@@ -861,7 +786,7 @@ app.get('/messages/:productId/:userId', isAuthenticated, async (req, res) => {
 });
 
 // Register handler
-app.post('/auth/register', async (req, res) => {
+app.post('/auth/register', csrfProtection , async (req, res) => {
   const { name, email, password, confirm_password } = req.body;
 
   if (password !== confirm_password) {
@@ -890,7 +815,7 @@ app.post('/auth/register', async (req, res) => {
 });
 
 // Logout
-app.get('/auth/logout', (req, res) => {
+app.get('/auth/logout',  csrfProtection ,(req, res) => {
   req.session.destroy();
   res.redirect('/');
 });
@@ -899,31 +824,19 @@ app.get('/auth/logout', (req, res) => {
 app.get('/profile', isAuthenticated, async (req, res) => {
   try {
     const userId = req.session.user.id;
-    
-    // Get user's products
-    const [products] = await db.query(
-      'SELECT * FROM products WHERE user_id = ? ORDER BY created_at DESC',
-      [userId]
-    );
-    
-    // Get available plans
+    const [products] = await db.query('SELECT * FROM products WHERE user_id = ? ORDER BY created_at DESC', [userId]);
     const [plans] = await db.query('SELECT * FROM plans');
-    
-    // Get unread message count
-    const [unreadResult] = await db.query(
-      'SELECT COUNT(*) as unreadCount FROM messages WHERE receiver_id = ? AND is_read = FALSE',
-      [userId]
-    );
-    const unreadCount = unreadResult[0].unreadCount || 0;
-    
+    const [unreadResult] = await db.query('SELECT COUNT(*) as unreadCount FROM messages WHERE receiver_id = ? AND is_read = FALSE', [userId]);
+
     res.render('profile', {
       user: req.session.user,
       products,
       plans,
+      unreadCount: unreadResult[0].unreadCount || 0,
       message: req.session.message,
-      unreadCount: unreadCount // Make sure this is passed to the template
+      csrfToken: req.csrfToken() // This is good
     });
-    
+
     delete req.session.message;
   } catch (error) {
     console.error('Profile error:', error);
@@ -931,11 +844,13 @@ app.get('/profile', isAuthenticated, async (req, res) => {
       user: req.session.user,
       status: 500,
       message: 'Error loading profile'
+
     });
   }
 });
+
 // Plan Selection
-app.get('/plans/select', isAuthenticated, (req, res) => {
+app.get('/plans/select', isAuthenticated, csrfProtection , (req, res) => {
   if (req.session.user.plan_id) {
     return res.redirect('/profile');
   }
@@ -953,7 +868,7 @@ app.get('/plans/select', isAuthenticated, (req, res) => {
 // Razorpay Integration
 
 // Create Razorpay order
-app.post('/create-razorpay-order', isAuthenticated, async (req, res) => {
+app.post('/create-razorpay-order', isAuthenticated, csrfProtection , async (req, res) => {
   const { plan_id } = req.body;
 
   try {
@@ -997,7 +912,7 @@ app.post('/create-razorpay-order', isAuthenticated, async (req, res) => {
 });
 
 // Verify payment and update plan
-app.post('/verify-payment', isAuthenticated, async (req, res) => {
+app.post('/verify-payment', isAuthenticated, csrfProtection , async (req, res) => {
   try {
     const { razorpay_payment_id, razorpay_order_id, razorpay_signature, plan_id } = req.body;
 
@@ -1060,49 +975,9 @@ app.post('/verify-payment', isAuthenticated, async (req, res) => {
 
 // Product Management
 
-// Remove product ID validation from create routes
-app.get('/products/create', isAuthenticated, async (req, res) => {
-  try {
-    if (!req.session.user.plan_id) {
-      req.session.message = {
-        type: 'warning',
-        text: 'Please select a plan before posting products'
-      };
-      return res.redirect('/plans/select');
-    }
-
-    const [count] = await db.query(
-      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
-      [req.session.user.id]
-    );
-    
-    if (count[0].count >= req.session.user.product_limit) {
-      req.session.message = {
-        type: 'danger',
-        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
-      };
-      return res.redirect('/profile');
-    }
-
-    res.render('products/create', {
-      user: req.session.user,
-      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
-      message: req.session.message || null
-    });
-
-    delete req.session.message;
-  } catch (error) {
-    console.error('Product create page error:', error);
-    res.status(500).render('error', {
-      user: req.session.user,
-      status: 500,
-      message: 'Error loading product creation page'
-    });
-  }
-});
 
 // Add this with your other routes
-app.get('/users/:id/phone', isAuthenticated, async (req, res) => {
+app.get('/users/:id/phone', isAuthenticated, csrfProtection , async (req, res) => {
   try {
     const [users] = await db.query(
       'SELECT phone FROM users WHERE id = ?',
@@ -1120,7 +995,7 @@ app.get('/users/:id/phone', isAuthenticated, async (req, res) => {
   }
 });
 
-app.post('/products/create', isAuthenticated, upload.single('image'), async (req, res) => {
+app.post('/products/create', isAuthenticated, csrfProtection, upload.single('image'), async (req, res) => {
   try {
     if (!req.session.user.plan_id) {
       req.session.message = { type: 'danger', text: 'Please select a plan before posting products' };
@@ -1131,10 +1006,10 @@ app.post('/products/create', isAuthenticated, upload.single('image'), async (req
       'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
       [req.session.user.id]
     );
-    
+
     if (count[0].count >= req.session.user.product_limit) {
-      req.session.message = { 
-        type: 'warning', 
+      req.session.message = {
+        type: 'warning',
         text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
       };
       return res.redirect('/profile');
@@ -1146,34 +1021,36 @@ app.post('/products/create', isAuthenticated, upload.single('image'), async (req
       return res.redirect('/products/create');
     }
 
-    const [result] = await db.query(
+    await db.query(
       'INSERT INTO products (user_id, title, description, price, image, category) VALUES (?, ?, ?, ?, ?, ?)',
       [req.session.user.id, title, description, parseFloat(price), req.file.filename, category]
     );
-    
+
     req.session.message = { type: 'success', text: 'Product posted successfully!' };
     return res.redirect('/profile');
-    
+
   } catch (error) {
     console.error('Product creation error:', error);
     req.session.message = { type: 'danger', text: 'Error creating product. Please try again.' };
     return res.redirect('/products/create');
   }
 });
-
 // Edit product page
 app.get('/products/:id/edit', 
   isAuthenticated, 
   validateProductId, 
   validateProductOwner, 
+  csrfProtection,
   async (req, res) => {
+    console.log('CSRF Token:', req.csrfToken()); // Debug line
     res.render('products/edit', { 
       user: req.session.user,
       product: req.product,
-      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others']
+      categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
+      csrfToken: req.csrfToken()
     });
-  }
-);
+});
+
 
 // Update product handler
 app.post('/products/:id/update', 
@@ -1181,9 +1058,10 @@ app.post('/products/:id/update',
   validateProductId, 
   validateProductOwner, 
   upload.single('image'), 
+  csrfProtection, 
   async (req, res) => {
     const { title, description, price, category } = req.body;
-    
+
     try {
       const updateData = {
         title,
@@ -1191,7 +1069,7 @@ app.post('/products/:id/update',
         price: parseFloat(price),
         category
       };
-      
+
       if (req.file) {
         const oldImage = path.join(__dirname, 'public', 'uploads', req.product.image);
         if (fs.existsSync(oldImage)) {
@@ -1199,16 +1077,14 @@ app.post('/products/:id/update',
         }
         updateData.image = req.file.filename;
       }
-      
-      await db.query(
-        'UPDATE products SET ? WHERE id = ?',
-        [updateData, req.productId]
-      );
-      
+
+      await db.query('UPDATE products SET ? WHERE id = ?', [updateData, req.productId]);
+
       req.session.message = {
         type: 'success',
         text: 'Product updated successfully'
       };
+
       res.redirect('/profile');
     } catch (error) {
       console.error(error);
@@ -1218,23 +1094,24 @@ app.post('/products/:id/update',
       };
       res.redirect(`/products/${req.productId}/edit`);
     }
-  }
-);
+});
 
 // Delete product
-app.post('/products/:id/delete', 
-  isAuthenticated, 
-  validateProductId, 
-  validateProductOwner, 
+app.post(
+  '/products/:id/delete',
+  isAuthenticated,
+  validateProductId,
+  validateProductOwner,
+  csrfProtection, // Must be AFTER body parsing and session middleware
   async (req, res) => {
     try {
       const imagePath = path.join(__dirname, 'public', 'uploads', req.product.image);
       if (fs.existsSync(imagePath)) {
         fs.unlinkSync(imagePath);
       }
-      
+
       await db.query('DELETE FROM products WHERE id = ?', [req.productId]);
-      
+
       req.session.message = {
         type: 'success',
         text: 'Product deleted successfully'
@@ -1254,7 +1131,7 @@ app.post('/products/:id/delete',
 // Admin Routes
 
 // Admin dashboard
-app.get('/admin/dashboard', isAdmin, async (req, res) => {
+app.get('/admin/dashboard', isAdmin, csrfProtection , async (req, res) => {
   try {
     // Get basic counts with fallbacks
     const getCount = async (query, fallback = 0) => {
@@ -1328,7 +1205,7 @@ app.get('/admin/dashboard', isAdmin, async (req, res) => {
 
 // Admin - List users
 // List Users
-app.get('/admin/users', isAdmin, async (req, res) => {
+app.get('/admin/users', isAdmin, csrfProtection , async (req, res) => {
   try {
     const [users] = await db.query(`
       SELECT u.*, COUNT(p.id) as product_count 
@@ -1353,7 +1230,7 @@ app.get('/admin/users', isAdmin, async (req, res) => {
   }
 });
 // Block/Unblock User
-app.post('/admin/users/:id/toggle-status', isAdmin, async (req, res) => {
+app.post('/admin/users/:id/toggle-status', csrfProtection, isAdmin, async (req, res) => {
   try {
     await db.query(
       'UPDATE users SET is_active = NOT is_active WHERE id = ?',
@@ -1417,7 +1294,7 @@ app.get('/admin/users/:id/products', isAdmin, async (req, res) => {
 
 // Approve/Reject Product
 // Approve product
-app.post('/admin/products/:id/approve', isAdmin, async (req, res) => {
+app.post('/admin/products/:id/approve', isAdmin, csrfProtection , async (req, res) => {
   try {
     await db.query(
       'UPDATE products SET is_approved = TRUE, is_active = TRUE WHERE id = ?',
@@ -1431,7 +1308,7 @@ app.post('/admin/products/:id/approve', isAdmin, async (req, res) => {
 });
 
 // Reject product
-app.post('/admin/products/:id/reject', isAdmin, async (req, res) => {
+app.post('/admin/products/:id/reject', isAdmin, csrfProtection , async (req, res) => {
   try {
     await db.query(
       'UPDATE products SET is_approved = FALSE, is_active = FALSE WHERE id = ?',
@@ -1446,7 +1323,7 @@ app.post('/admin/products/:id/reject', isAdmin, async (req, res) => {
 
 // Pending Products
 // Admin product approval routes
-app.get('/admin/products/pending', isAdmin, async (req, res) => {
+app.get('/admin/products/pending', isAdmin, csrfProtection , async (req, res) => {
   try {
     const [products] = await db.query(`
       SELECT p.*, u.name as user_name, u.email as user_email
@@ -1472,7 +1349,7 @@ app.get('/admin/products/pending', isAdmin, async (req, res) => {
 });
 
 // Flagged Products
-app.get('/admin/products/flagged', isAdmin, async (req, res) => {
+app.get('/admin/products/flagged', isAdmin, csrfProtection , async (req, res) => {
   try {
     const [products] = await db.query(`
       SELECT p.*, u.name as user_name, COUNT(r.id) as report_count
@@ -1494,7 +1371,7 @@ app.get('/admin/products/flagged', isAdmin, async (req, res) => {
     res.status(500).render('admin/error', { admin: req.session.admin });
   }
 });
-app.get('/admin/reports', isAdmin, async (req, res) => {
+app.get('/admin/reports', isAdmin, csrfProtection , async (req, res) => {
   try {
     const [reports] = await db.query(`
       SELECT r.*, p.title as product_title, u.name as reporter_name
@@ -1515,7 +1392,7 @@ app.get('/admin/reports', isAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/reports/:id/resolve', isAdmin, async (req, res) => {
+app.post('/admin/reports/:id/resolve', isAdmin, csrfProtection , async (req, res) => {
   try {
     const { action } = req.body;
     
@@ -1537,7 +1414,7 @@ app.post('/admin/reports/:id/resolve', isAdmin, async (req, res) => {
     res.status(500).render('admin/error', { admin: req.session.admin });
   }
 });
-app.get('/admin/transactions', isAdmin, async (req, res) => {
+app.get('/admin/transactions', isAdmin, csrfProtection, async (req, res) => {
   try {
     const [transactions] = await db.query(`
       SELECT t.*, 
@@ -1566,7 +1443,7 @@ app.get('/admin/transactions', isAdmin, async (req, res) => {
     res.status(500).render('admin/error', { admin: req.session.admin });
   }
 });
-app.get('/admin/feedback', isAdmin, async (req, res) => {
+app.get('/admin/feedback', isAdmin, csrfProtection , async (req, res) => {
   try {
     const [feedback] = await db.query(`
       SELECT f.*, 
@@ -1590,7 +1467,7 @@ app.get('/admin/feedback', isAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/feedback/:id/block', isAdmin, async (req, res) => {
+app.post('/admin/feedback/:id/block', isAdmin, csrfProtection , async (req, res) => {
   try {
     await db.query(
       'UPDATE feedback SET is_blocked = TRUE WHERE id = ?',
@@ -1605,7 +1482,7 @@ app.post('/admin/feedback/:id/block', isAdmin, async (req, res) => {
 });
 // block user
 // Block user
-app.post('/admin/users/:id/block', isAdmin, async (req, res) => {
+app.post('/admin/users/:id/block', isAdmin, csrfProtection , async (req, res) => {
   try {
     const { reason } = req.body;
     
@@ -1634,7 +1511,7 @@ app.post('/admin/users/:id/block', isAdmin, async (req, res) => {
 });
 
 // Unblock user
-app.post('/admin/users/:id/unblock', isAdmin, async (req, res) => {
+app.post('/admin/users/:id/unblock', isAdmin, csrfProtection , async (req, res) => {
   try {
     await db.query(
       'UPDATE users SET is_blocked = FALSE, blocked_reason = NULL, blocked_at = NULL WHERE id = ?',
@@ -1663,7 +1540,7 @@ async function destroyUserSessions(userId) {
   // This depends on your session store (Redis, database, etc.)
 }
 
-app.get('/admin/categories', isAdmin, async (req, res) => {
+app.get('/admin/categories', isAdmin, csrfProtection , async (req, res) => {
   try {
     const [categories] = await db.query(`
       SELECT c.*, 
@@ -1686,7 +1563,7 @@ app.get('/admin/categories', isAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/categories', isAdmin, categoryUpload.single('image'), async (req, res) => {
+app.post('/admin/categories', isAdmin, csrfProtection , categoryUpload.single('image'), async (req, res) => {
   try {
     const { name, parent_id } = req.body;
     
@@ -1717,7 +1594,7 @@ app.get('/admin/settings', isAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/settings/change-password', isAdmin, async (req, res) => {
+app.post('/admin/settings/change-password', isAdmin, csrfProtection , async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
     
@@ -1749,7 +1626,7 @@ app.post('/admin/settings/change-password', isAdmin, async (req, res) => {
     res.status(500).render('admin/error', { admin: req.session.admin });
   }
 });
-app.get('/admin/tickets', isAdmin, async (req, res) => {
+app.get('/admin/tickets', isAdmin, csrfProtection , async (req, res) => {
   try {
     const [tickets] = await db.query(`
       SELECT t.*, u.name as user_name
@@ -1769,7 +1646,7 @@ app.get('/admin/tickets', isAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/tickets/:id/reply', isAdmin, async (req, res) => {
+app.post('/admin/tickets/:id/reply', isAdmin, csrfProtection , async (req, res) => {
   try {
     const { reply } = req.body;
     
@@ -1785,7 +1662,7 @@ app.post('/admin/tickets/:id/reply', isAdmin, async (req, res) => {
   }
 });
 // Admin - List products
-app.get('/admin/products', isAdmin, async (req, res) => {
+app.get('/admin/products', isAdmin, csrfProtection , async (req, res) => {
   try {
     const [products] = await db.query(`
       SELECT p.*, u.name as user_name, u.email as user_email
@@ -1805,7 +1682,7 @@ app.get('/admin/products', isAdmin, async (req, res) => {
 });
 
 // Admin - Toggle product status
-app.post('/admin/products/:id/toggle', isAdmin, validateProductId, async (req, res) => {
+app.post('/admin/products/:id/toggle', isAdmin, validateProductId, csrfProtection , async (req, res) => {
   try {
     await db.query(
       'UPDATE products SET is_active = NOT is_active WHERE id = ?',
@@ -1820,7 +1697,7 @@ app.post('/admin/products/:id/toggle', isAdmin, validateProductId, async (req, r
 });
 
 // Admin - Delete product
-app.post('/admin/products/:id/delete', isAdmin, validateProductId, async (req, res) => {
+app.post('/admin/products/:id/delete', isAdmin, validateProductId, csrfProtection , async (req, res) => {
   try {
     const [products] = await db.query('SELECT * FROM products WHERE id = ?', [req.productId]);
     
@@ -1841,7 +1718,7 @@ app.post('/admin/products/:id/delete', isAdmin, validateProductId, async (req, r
 });
 
 // Admin Registration Routes
-app.get('/admin/register', (req, res) => {
+app.get('/admin/register', csrfProtection , (req, res) => {
   if (req.session.admin) return res.redirect('/admin/dashboard');
   res.render('admin/register', { 
     error: null,
@@ -1849,7 +1726,7 @@ app.get('/admin/register', (req, res) => {
   });
 });
 
-app.post('/admin/register', async (req, res) => {
+app.post('/admin/register', csrfProtection , async (req, res) => {
   const { name, email, password, confirm_password, secret_key } = req.body;
   
   if (password !== confirm_password) {
@@ -1897,7 +1774,7 @@ app.post('/admin/register', async (req, res) => {
 });
 
 // One-time setup route (remove after first use)
-app.get('/setup-first-admin', async (req, res) => {
+app.get('/setup-first-admin', csrfProtection, async (req, res) => {
   const [admins] = await db.query('SELECT id FROM admins');
   if (admins.length > 0) return res.send('Admin already exists');
   
@@ -1930,7 +1807,7 @@ app.use((err, req, res, next) => {
 
 // products rating
 // Add to your existing routes
-app.post('/api/ratings', isAuthenticated, async (req, res) => {
+app.post('/api/ratings', isAuthenticated, csrfProtection , async (req, res) => {
   try {
     const { productId, rating, comment } = req.body;
     const userId = req.session.user.id;
@@ -1989,7 +1866,7 @@ app.post('/api/ratings', isAuthenticated, async (req, res) => {
   }
 });
 
-app.get('/api/ratings/:productId', async (req, res) => {
+app.get('/api/ratings/:productId', csrfProtection, async (req, res) => {
   try {
     const { productId } = req.params;
 

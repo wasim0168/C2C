@@ -44,6 +44,8 @@ router.get('/:id', async (req, res, next) => {
   }
 });
 
+
+
 // Update product
 router.put('/:id', upload.single('image'), async (req, res) => {
   try {

@@ -44,11 +44,11 @@
                 <div class="card-footer bg-white">
                   <a href="/products/<%= product.id %>" class="btn btn-sm btn-outline-primary">View</a>
                   <a href="/admin/products/<%= product.id %>/edit" class="btn btn-sm btn-outline-secondary">Edit</a>
-                  <form action="/admin/products/<%= product.id %>/toggle-status" method="POST" class="d-inline">
-                    <button type="submit" class="btn btn-sm <%= product.is_active ? 'btn-outline-danger' : 'btn-outline-success' %>">
-                      <%= product.is_active ? 'Deactivate' : 'Activate' %>
-                    </button>
-                  </form>
+             <form action="/admin/products/<%= product.id %>/toggle-status" method="POST" class="d-inline">
+  <button type="submit" class="btn btn-sm <%= product.is_active ? 'btn-outline-danger' : 'btn-outline-success' %>">
+    <%= product.is_active ? 'Deactivate' : 'Activate' %>
+  </button>
+</form>
                 </div>
               </div>
             </div>

@@ -1,95 +1,307 @@
 <%- include('../partials/header', { user, product }) %>
 
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.0.1/js/bootstrap.min.js" crossorigin="anonymous"></script>
 
 <% if (!product) { %>
-  <div class="container my-5">
-    <div class="alert alert-warning">
-      <h4><i class="bi bi-exclamation-triangle"></i> Product Not Available</h4>
-      <p>The product you're looking for has been removed or doesn't exist.</p>
-      <div class="mt-3">
-        <a href="/" class="btn btn-primary me-2"><i class="bi bi-house"></i> Browse Products</a>
+  <div class="container my-2 animate__animated animate__fadeIn">
+    <div class="alert alert-warning text-center py-4">
+      <div class="display-4 mb-3">
+        <i class="fas fa-exclamation-circle"></i>
+      </div>
+      <h2 class="fw-bold">Product Not Available</h2>
+      <p class="lead">The product you're looking for has been removed or doesn't exist.</p>
+      <div class="mt-4">
+        <a href="/" class="btn btn-primary btn-lg px-4 me-2">
+          <i class="fas fa-home me-2"></i>Browse Products
+        </a>
       </div>
     </div>
   </div>
 <% } else { %>
-  <div class="container my-4">
-    <!-- Breadcrumb -->
-    <nav aria-label="breadcrumb">
-      <ol class="breadcrumb">
-        <li class="breadcrumb-item"><a href="/">Home</a></li>
-        <li class="breadcrumb-item"><a href="/search?category=<%= product.category %>"><%= product.category %></a></li>
-        <li class="breadcrumb-item active" aria-current="page"><%= product.title %></li>
-      </ol>
-    </nav>
+  <!-- Breadcrumb -->
+  <div class="bg-light py-2">
+    <div class="container">
+      <nav aria-label="breadcrumb">
+        <ol class="breadcrumb mb-0">
+          <li class="breadcrumb-item"><a href="/" class="text-decoration-none"><i class="fas fa-home"></i></a></li>
+          <li class="breadcrumb-item"><a href="/search?category=<%= product.category %>" class="text-decoration-none"><%= product.category %></a></li>
+          <li class="breadcrumb-item active" aria-current="page"><%= product.title %></li>
+        </ol>
+      </nav>
+    </div>
+  </div>
 
-    <!-- Product Details -->
-    <div class="card mb-4 shadow-sm p-3">
-      <div class="row g-4 align-items-start">
-        <!-- Left: Image/Carousel -->
-        <div class="col-md-6">
-          <div id="productCarousel" class="carousel slide" data-bs-ride="carousel">
-            <div class="carousel-inner rounded">
-              <div class="carousel-item active">
-                <img src="/uploads/<%= product.image %>" class="d-block w-50 h-50 mx-auto" alt="<%= product.title %>" style="object-fit: cover; height: 350px;">
+  <!-- Main Product Section -->
+  <div class="container my-4 animate__animated animate__fadeIn">
+    <div class="card border-0 shadow-lg overflow-hidden">
+      <div class="row g-0">
+        <!-- Image Gallery -->
+        <div class="col-lg-6">
+          <div class="p-3 p-lg-4 bg-light">
+            <div id="productCarousel" class="carousel slide" data-bs-ride="carousel">
+              <div class="carousel-inner rounded-3">
+                <div class="carousel-item active">
+                  <img src="/uploads/<%= product.image %>" 
+                       class="d-block w-100 img-fluid product-main-image" 
+                       alt="<%= product.title %>"
+                       loading="lazy">
+                </div>
+                <% if (product.additionalImages && product.additionalImages.length > 0) { %>
+                  <% product.additionalImages.forEach((image, index) => { %>
+                    <div class="carousel-item">
+                      <img src="/uploads/<%= image %>" 
+                           class="d-block w-100 img-fluid product-main-image" 
+                           alt="Additional image <%= index + 1 %>"
+                           loading="lazy">
+                    </div>
+                  <% }); %>
+                <% } %>
               </div>
+              
               <% if (product.additionalImages && product.additionalImages.length > 0) { %>
-                <% product.additionalImages.forEach((image, index) => { %>
-                  <div class="carousel-item">
-                    <img src="/uploads/<%= image %>" class="d-block w-50 h-50 mx-auto" alt="Additional image <%= index + 1 %>" style="object-fit: cover; height: 350px;">
-                  </div>
-                <% }) %>
+                <button class="carousel-control-prev" type="button" data-bs-target="#productCarousel" data-bs-slide="prev">
+                  <span class="carousel-control-prev-icon bg-dark rounded-circle p-3"></span>
+                  <span class="visually-hidden">Previous</span>
+                </button>
+                <button class="carousel-control-next" type="button" data-bs-target="#productCarousel" data-bs-slide="next">
+                  <span class="carousel-control-next-icon bg-dark rounded-circle p-3"></span>
+                  <span class="visually-hidden">Next</span>
+                </button>
               <% } %>
             </div>
-
+            
+            <!-- Thumbnail Navigation -->
             <% if (product.additionalImages && product.additionalImages.length > 0) { %>
-              <button class="carousel-control-prev" type="button" data-bs-target="#productCarousel" data-bs-slide="prev">
-                <span class="carousel-control-prev-icon"></span>
-                <span class="visually-hidden">Previous</span>
-              </button>
-              <button class="carousel-control-next" type="button" data-bs-target="#productCarousel" data-bs-slide="next">
-                <span class="carousel-control-next-icon"></span>
-                <span class="visually-hidden">Next</span>
-              </button>
+              <div class="row g-2 mt-3">
+                <div class="col-3">
+                  <a href="#" class="d-block thumbnail-item active" data-bs-target="#productCarousel" data-bs-slide-to="0">
+                    <img src="/uploads/<%= product.image %>" class="img-thumbnail" alt="Thumbnail 1" loading="lazy">
+                  </a>
+                </div>
+                <% product.additionalImages.forEach((image, index) => { %>
+                  <div class="col-3">
+                    <a href="#" class="d-block thumbnail-item" data-bs-target="#productCarousel" data-bs-slide-to="<%= index + 1 %>">
+                      <img src="/uploads/<%= image %>" class="img-thumbnail" alt="Thumbnail <%= index + 2 %>" loading="lazy">
+                    </a>
+                  </div>
+                <% }); %>
+              </div>
             <% } %>
           </div>
         </div>
 
-        <!-- Right: Product Info -->
-        <div class="col-md-6">
-          <h3 class="fw-bold"><%= product.title %></h3>
-          <p class="text-muted mb-2">Category: <%= product.category %></p>
-          <p class="text-secondary"><%= product.description %></p>
-          <h4 class="text-success">₹<%= product.price %></h4>
-          <p class="mb-1"><strong>Seller:</strong> <%= product.user_name %></p>
-          <hr>
-          <button type="button" class="btn btn-warning" data-bs-toggle="modal" data-bs-target="#chatModal">
-            <i class="bi bi-chat-dots fs-5"></i> Chat with seller
-          </button>
+        <!-- Product Info -->
+        <div class="col-lg-6">
+          <div class="p-4 p-lg-5 h-100 d-flex flex-column">
+            <div class="mb-3">
+              <span class="badge bg-success bg-opacity-10 text-success mb-2"><%= product.category %></span>
+              <h1 class="fw-bold mb-2"><%= product.title %></h1>
+              
+              <% const avgRating = product.averageRating || 0; %>
+              <div class="d-flex align-items-center mb-3">
+                <div class="rating-stars fs-5 me-2">
+                  <% for (let i = 1; i <= 5; i++) { %>
+                    <% if (i <= Math.floor(avgRating)) { %>
+                      <i class="fas fa-star text-warning"></i>
+                    <% } else if (i === Math.ceil(avgRating) && avgRating % 1 >= 0.5) { %>
+                      <i class="fas fa-star-half-alt text-warning"></i>
+                    <% } else { %>
+                      <i class="far fa-star text-warning"></i>
+                    <% } %>
+                  <% } %>
+                </div>
+                <small class="text-muted">(<%= product.ratingCount || 0 %> reviews)</small>
+              </div>
+              
+              <div class="d-flex align-items-center mb-3">
+                <h2 class="text-primary fw-bold mb-0">₹<%= product.price %></h2>
+                <% if (product.originalPrice && product.originalPrice > product.price) { %>
+                  <span class="text-decoration-line-through text-muted ms-2 fs-5">₹<%= product.originalPrice %></span>
+                  <span class="badge bg-danger ms-2">
+                    <%= Math.round((1 - product.price/product.originalPrice) * 100) %>% OFF
+                  </span>
+                <% } %>
+              </div>
+              
+              <div class="d-flex align-items-center mb-3">
+                <span class="text-success me-2"><i class="fas fa-check-circle"></i> In Stock</span>
+                <span class="text-muted"><i class="fas fa-box-open"></i> 10+ available</span>
+              </div>
+            </div>
+            
+            <div class="mb-4">
+              <h5 class="fw-bold mb-3">Description</h5>
+              <p class="text-muted"><%= product.description %></p>
+            </div>
+            
+            <div class="mb-4">
+              <div class="d-flex align-items-center mb-3">
+                <div class="me-3">
+                  <img src="https://ui-avatars.com/api/?name=<%= product.user_name %>&background=random" 
+                       class="rounded-circle" width="40" alt="Seller">
+                </div>
+                <div>
+                  <p class="mb-0 fw-bold">Sold by</p>
+                  <p class="mb-0"><%= product.user_name %></p>
+                </div>
+              </div>
+            </div>
+            
+            <div class="mt-auto pt-3">
+              <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-warning btn-lg px-4 flex-grow-1 fw-bold" data-bs-toggle="modal" data-bs-target="#chatModal">
+                  <i class="fas fa-comment-dots me-2 "></i> Chat with seller
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Product Details Tabs -->
+    <div class="card border-0 shadow-lg mt-4">
+      <div class="card-body">
+        <ul class="nav nav-tabs" id="productTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="btn btn-warning" id="details-tab" data-bs-toggle="tab" data-bs-target="#details" type="button" role="tab">Details</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="btn btn-warning mx-2" id="reviews-tab" data-bs-toggle="tab" data-bs-target="#reviews" type="button" role="tab">Reviews</button>
+  </li>
+</ul>
+        <div class="tab-content p-3" id="productTabsContent">
+          <div class="tab-pane fade show active" id="details" role="tabpanel">
+            <h5 class="fw-bold mb-3">Product Details</h5>
+            <p><%= product.description %></p>
+          </div>
+          <div class="tab-pane fade" id="reviews" role="tabpanel">
+            <!-- Rating Section -->
+            <div class="d-flex justify-content-between align-items-center mb-4">
+              <div>
+                <h5 class="fw-bold mb-0">Customer Reviews</h5>
+                <div class="d-flex align-items-center mt-2">
+                  <div class="rating-stars fs-4 me-2">
+                    <% for (let i = 1; i <= 5; i++) { %>
+                      <% if (i <= Math.floor(avgRating)) { %>
+                        <i class="fas fa-star text-warning"></i>
+                      <% } else if (i === Math.ceil(avgRating) && avgRating % 1 >= 0.5) { %>
+                        <i class="fas fa-star-half-alt text-warning"></i>
+                      <% } else { %>
+                        <i class="far fa-star text-warning"></i>
+                      <% } %>
+                    <% } %>
+                  </div>
+                  <span class="fw-bold"><%= avgRating.toFixed(1) %> out of 5</span>
+                </div>
+              </div>
+              <div>
+                <small class="text-muted"><%= product.ratingCount || 0 %> global ratings</small>
+              </div>
+            </div>
+
+            <% if (user) { %>
+              <div class="card mb-4 border-0 shadow-sm">
+                <div class="card-body">
+                  <h6>Rate this product</h6>
+                  <form id="ratingForm">
+                    <input type="hidden" name="productId" value="<%= product.id %>">
+                    <div class="mb-3">
+                      <div class="rating-input">
+                        <input type="radio" id="star5" name="rating" value="5" required>
+                        <label for="star5" title="5 stars"><i class="far fa-star"></i></label>
+                        <input type="radio" id="star4" name="rating" value="4">
+                        <label for="star4" title="4 stars"><i class="far fa-star"></i></label>
+                        <input type="radio" id="star3" name="rating" value="3">
+                        <label for="star3" title="3 stars"><i class="far fa-star"></i></label>
+                        <input type="radio" id="star2" name="rating" value="2">
+                        <label for="star2" title="2 stars"><i class="far fa-star"></i></label>
+                        <input type="radio" id="star1" name="rating" value="1">
+                        <label for="star1" title="1 star"><i class="far fa-star"></i></label>
+                      </div>
+                    </div>
+                    <div class="mb-3">
+                      <label for="comment" class="form-label">Your review</label>
+                      <textarea class="form-control" id="comment" name="comment" rows="3" placeholder="Share your experience with this product"></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Submit Review</button>
+                  </form>
+                </div>
+              </div>
+            <% } else { %>
+              <div class="alert alert-info">
+                <a href="/auth/login" class="alert-link fw-bold">Login</a> to rate this product
+              </div>
+            <% } %>
+
+            <div id="ratingsList">
+              <!-- Sample Review -->
+              <div class="card border-0 shadow-sm mb-3">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between mb-2">
+                    <div class="d-flex align-items-center">
+                      <img src="https://randomuser.me/api/portraits/men/32.jpg" class="rounded-circle me-2" width="40" alt="User">
+                      <div>
+                        <h6 class="mb-0 fw-bold">John Doe</h6>
+                        <div class="rating-stars small">
+                          <i class="fas fa-star text-warning"></i>
+                          <i class="fas fa-star text-warning"></i>
+                          <i class="fas fa-star text-warning"></i>
+                          <i class="fas fa-star text-warning"></i>
+                          <i class="far fa-star text-warning"></i>
+                        </div>
+                      </div>
+                    </div>
+                    <small class="text-muted">2 days ago</small>
+                  </div>
+                  <p class="mb-0">Great product! Works exactly as described. Very happy with my purchase.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
     <!-- Similar Products -->
-    <% if (similarProducts.length > 0) { %>
-      <div class="row mt-5">
-        <div class="col-12">
-          <h4>Similar Products</h4>
-          <div class="row">
-            <% similarProducts.forEach(product => { %>
-              <div class="col-md-3 mb-4">
-                <div class="card h-100 shadow-sm">
-                  <img src="/uploads/<%= product.image %>" class="card-img-top" alt="<%= product.title %>" style="height: 180px; object-fit: cover;">
-                  <div class="card-body">
-                    <h6 class="card-title"><%= product.title %></h6>
-                    <p class="text-muted small"><%= product.category %></p>
-                    <p class="fw-bold text-success">₹<%= product.price %></p>
-                    <a href="/products/<%= product.id %>" class="btn btn-outline-primary btn-sm w-100">View</a>
+    <% if (similarProducts && similarProducts.length > 0) { %>
+      <div class="mt-5">
+        <h4 class="fw-bold mb-4">Similar Products</h4>
+        <div class="row g-4">
+          <% similarProducts.forEach(similarProduct => { %>
+            <div class="col-md-3 col-6">
+              <div class="card h-100 border-0 shadow-sm product-card">
+                <div class="badge bg-danger position-absolute mt-2 ms-2">Sale</div>
+                <img src="/uploads/<%= similarProduct.image %>" 
+                     class="card-img-top product-image" 
+                     alt="<%= similarProduct.title %>"
+                     loading="lazy">
+                <div class="card-body">
+                  <h6 class="card-title mb-1"><%= similarProduct.title %></h6>
+                  <p class="text-muted small mb-2"><%= similarProduct.category %></p>
+                  <div class="d-flex align-items-center mb-2">
+                    <h6 class="text-primary fw-bold mb-0">₹<%= similarProduct.price %></h6>
+                    <% if (similarProduct.originalPrice && similarProduct.originalPrice > similarProduct.price) { %>
+                      <small class="text-decoration-line-through text-muted ms-2">₹<%= similarProduct.originalPrice %></small>
+                    <% } %>
+                  </div>
+                  <div class="rating-stars small mb-2">
+                    <i class="fas fa-star text-warning"></i>
+                    <i class="fas fa-star text-warning"></i>
+                    <i class="fas fa-star text-warning"></i>
+                    <i class="fas fa-star-half-alt text-warning"></i>
+                    <i class="far fa-star text-warning"></i>
+                    <small class="text-muted ms-1">(24)</small>
                   </div>
                 </div>
+                <div class="card-footer bg-transparent border-top-0">
+                  <a href="/products/<%= similarProduct.id %>" class="btn btn-outline-primary btn-sm w-100 stretched-link">View Details</a>
+                </div>
               </div>
-            <% }) %>
-          </div>
+            </div>
+          <% }); %>
         </div>
       </div>
     <% } %>
@@ -98,34 +310,38 @@
 
 <!-- Chat Modal -->
 <div class="modal fade" id="chatModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content overflow-hidden">
       <div class="modal-header bg-primary text-white">
         <h5 class="modal-title">
-          <i class="bi bi-chat-dots-fill"></i> Chat with <%= product.user_name %>
+          <i class="fas fa-comments me-2"></i> Chat with <%= product.user_name %>
         </h5>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body p-0">
-        <div class="chat-container">
-          <div class="chat-header p-3 border-bottom">
-            <div class="d-flex align-items-center">
-              <img src="/uploads/<%= product.image %>" class="chat-product-img rounded me-3" alt="<%= product.title %>">
-              <div>
-                <h6 class="mb-0"><%= product.title %></h6>
-                <small class="text-muted">₹<%= product.price %></small>
+        <div class="chat-container d-flex flex-column" style="height: 500px;">
+          <div class="chat-header p-3 border-bottom d-flex align-items-center">
+            <img src="/uploads/<%= product.image %>" class="rounded me-3" width="60" alt="<%= product.title %>">
+            <div>
+              <h6 class="mb-0 fw-bold"><%= product.title %></h6>
+              <div class="d-flex align-items-center">
+                <span class="text-success fw-bold">₹<%= product.price %></span>
+                <% if (product.originalPrice && product.originalPrice > product.price) { %>
+                  <small class="text-decoration-line-through text-muted ms-2">₹<%= product.originalPrice %></small>
+                <% } %>
               </div>
             </div>
           </div>
-          <div class="chat-messages p-3" id="chatMessages"></div>
-          <div class="chat-input p-3 border-top">
-            <form id="chatForm" class="d-flex">
-
+          <div class="chat-messages p-3 flex-grow-1 overflow-auto" id="chatMessages">
+            <!-- Messages will appear here -->
+          </div>
+          <div class="chat-input p-3 border-top bg-light">
+            <form id="chatForm" class="d-flex align-items-center">
               <input type="hidden" id="productId" value="<%= product.id %>">
               <input type="hidden" id="receiverId" value="<%= product.user_id %>">
-              <input type="text" id="messageInput" class="form-control me-2" placeholder="Type your message..." required>
-              <button type="submit" class="btn btn-primary">
-                <i class="bi bi-send-fill"></i>
+              <input type="text" id="messageInput" class="form-control rounded-pill me-2" placeholder="Type your message..." required>
+              <button type="submit" class="btn btn-primary rounded-circle" style="width: 40px; height: 40px;">
+                <i class="fas fa-paper-plane"></i>
               </button>
             </form>
           </div>
@@ -135,87 +351,34 @@
   </div>
 </div>
 
-<!-- rating  -->
-
-<!-- Rating Section -->
-<div class="card mb-4 shadow-sm p-3">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h4 class="mb-0">Product Ratings</h4>
-    <div class="d-flex align-items-center">
-      <div class="me-2">
-        <span id="averageRating" class="fw-bold fs-3">0.0</span>
-        <span class="text-muted">/5.0</span>
-      </div>
-      <div class="rating-stars fs-4" id="averageStars">
-        <!-- Stars will be inserted here by JavaScript -->
-      </div>
-      <small class="text-muted ms-2" id="ratingCount">(0 reviews)</small>
-    </div>
-  </div>
-
-  <% if (user) { %>
-    <div class="card mb-3 p-3">
-      <h5>Rate this product</h5>
-      <form id="ratingForm">
-        <input type="hidden" name="productId" value="<%= product.id %>">
-        <div class="mb-3">
-          <div class="rating-input">
-            <input type="radio" id="star5" name="rating" value="5" required>
-            <label for="star5" title="5 stars">★</label>
-            <input type="radio" id="star4" name="rating" value="4">
-            <label for="star4" title="4 stars">★</label>
-            <input type="radio" id="star3" name="rating" value="3">
-            <label for="star3" title="3 stars">★</label>
-            <input type="radio" id="star2" name="rating" value="2">
-            <label for="star2" title="2 stars">★</label>
-            <input type="radio" id="star1" name="rating" value="1">
-            <label for="star1" title="1 star">★</label>
-          </div>
-        </div>
-        <div class="mb-3">
-          <label for="comment" class="form-label">Your review (optional)</label>
-          <textarea class="form-control" id="comment" name="comment" rows="3"></textarea>
-        </div>
-        <button type="submit" class="btn btn-primary">Submit Rating</button>
-      </form>
-    </div>
-  <% } else { %>
-    <div class="alert alert-info">
-      <a href="/auth/login" class="alert-link">Login</a> to rate this product
-    </div>
-  <% } %>
-
-  <div id="ratingsList">
-    <!-- Ratings will be loaded here -->
-  </div>
-</div>
-
 <!-- Chat Script -->
 <script src="/socket.io/socket.io.js"></script>
 <script>
   const socket = io();
-  const currentUserId = '<%= user?.id %>';
+  const currentUserId = '<%= user ? user.id : "" %>';
 
   if (currentUserId) socket.emit('register', currentUserId);
 
   const chatModal = document.getElementById('chatModal');
-  chatModal.addEventListener('show.bs.modal', async function () {
-    const productId = document.getElementById('productId').value;
-    const receiverId = document.getElementById('receiverId').value;
+  if (chatModal) {
+    chatModal.addEventListener('show.bs.modal', async function () {
+      const productId = document.getElementById('productId').value;
+      const receiverId = document.getElementById('receiverId').value;
 
-    try {
-      const response = await fetch(`/api/messages?productId=${productId}&otherUserId=${receiverId}`);
-      const messages = await response.json();
+      try {
+        const response = await fetch(`/api/messages?productId=${productId}&otherUserId=${receiverId}`);
+        const messages = await response.json();
 
-      const chatMessages = document.getElementById('chatMessages');
-      chatMessages.innerHTML = '';
+        const chatMessages = document.getElementById('chatMessages');
+        chatMessages.innerHTML = '';
 
-      messages.forEach(msg => appendMessage(msg));
-      chatMessages.scrollTop = chatMessages.scrollHeight;
-    } catch (error) {
-      console.error('Error loading messages:', error);
-    }
-  });
+        messages.forEach(msg => appendMessage(msg));
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      } catch (error) {
+        console.error('Error loading messages:', error);
+      }
+    });
+  }
 
   socket.on('newMessage', (message) => {
     const currentProductId = document.getElementById('productId')?.value;
@@ -228,55 +391,63 @@
     }
   });
 
-  document.getElementById('chatForm').addEventListener('submit', function (e) {
-    e.preventDefault();
+  const chatForm = document.getElementById('chatForm');
+  if (chatForm) {
+    chatForm.addEventListener('submit', function (e) {
+      e.preventDefault();
 
-    const messageInput = document.getElementById('messageInput');
-    const productId = document.getElementById('productId').value;
-    const receiverId = document.getElementById('receiverId').value;
+      const messageInput = document.getElementById('messageInput');
+      const productId = document.getElementById('productId').value;
+      const receiverId = document.getElementById('receiverId').value;
 
-    if (messageInput.value.trim() && currentUserId) {
-      socket.emit('sendMessage', {
-        senderId: currentUserId,
-        receiverId: receiverId,
-        productId: productId,
-        message: messageInput.value.trim()
-      });
+      if (messageInput.value.trim() && currentUserId) {
+        socket.emit('sendMessage', {
+          senderId: currentUserId,
+          receiverId: receiverId,
+          productId: productId,
+          message: messageInput.value.trim()
+        });
 
-      messageInput.value = '';
-    }
-  });
+        messageInput.value = '';
+      }
+    });
+  }
 
   function appendMessage(msg) {
     const chatMessages = document.getElementById('chatMessages');
     const isCurrentUser = msg.senderId == currentUserId;
 
     const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${isCurrentUser ? 'sent' : 'received'}`;
+    messageDiv.className = `message ${isCurrentUser ? 'sent' : 'received'} mb-3`;
 
     messageDiv.innerHTML = `
-      <div class="message-content">
-        ${!isCurrentUser ? `<div class="sender-name">${msg.senderName}</div>` : ''}
-        <div class="message-text">${msg.message}</div>
-        <div class="message-time">${new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+      <div class="d-flex ${isCurrentUser ? 'justify-content-end' : 'justify-content-start'}">
+        <div class="message-content ${isCurrentUser ? 'bg-primary text-white' : 'bg-light'} rounded-3 p-3">
+          ${!isCurrentUser ? `<div class="sender-name fw-bold small">${msg.senderName}</div>` : ''}
+          <div class="message-text">${msg.message}</div>
+          <div class="message-time small text-end ${isCurrentUser ? 'text-white-50' : 'text-muted'} mt-1">
+            ${new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </div>
+        </div>
       </div>
     `;
 
     chatMessages.appendChild(messageDiv);
   }
-// rating script
 
-// Rating System
-document.addEventListener('DOMContentLoaded', async () => {
-    const productId = '<%= product.id %>';
-    const currentUser =  typeof user !== 'undefined' ? JSON.stringify(user) : 'null';
+  // Rating System
+  document.addEventListener('DOMContentLoaded', async () => {
+    const productId = '<%= product ? product.id : "" %>';
     
     // Load initial ratings
-    await loadRatings(productId);
+    if (productId) {
+      await loadRatings(productId);
+    }
     
     // Setup rating form if user is logged in
-    if (currentUser) {
-      document.getElementById('ratingForm')?.addEventListener('submit', async (e) => {
+    const ratingForm = document.getElementById('ratingForm');
+    if (ratingForm) {
+      ratingForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         
         const formData = new FormData(e.target);
@@ -298,189 +469,214 @@ document.addEventListener('DOMContentLoaded', async () => {
           const result = await response.json();
           if (result.success) {
             e.target.reset();
+            await loadRatings(productId);
           }
         } catch (error) {
           console.error('Rating submission error:', error);
         }
       });
     }
+  });
+
+  async function loadRatings(productId) {
+    try {
+      const response = await fetch(`/api/ratings/${productId}`);
+      const data = await response.json();
+      
+      renderRatings(data.ratings);
+    } catch (error) {
+      console.error('Error loading ratings:', error);
+    }
+  }
+
+  function renderRatings(ratings) {
+    const container = document.getElementById('ratingsList');
     
-    // Listen for real-time rating updates
-    socket.on('ratingUpdate', (data) => {
-      if (data.productId == productId) {
-        updateRatingDisplay(data.average, data.count);
-        renderRatings(data.ratings);
-      }
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    if (!ratings || ratings.length === 0) {
+      container.innerHTML = '<div class="alert alert-info">No reviews yet. Be the first to review!</div>';
+      return;
+    }
+    
+    ratings.forEach(rating => {
+      const ratingEl = document.createElement('div');
+      ratingEl.className = 'card border-0 shadow-sm mb-3';
+      ratingEl.innerHTML = `
+        <div class="card-body">
+          <div class="d-flex justify-content-between mb-2">
+            <div class="d-flex align-items-center">
+              <img src="https://ui-avatars.com/api/?name=${rating.user_name}&background=random" 
+                   class="rounded-circle me-2" width="40" alt="${rating.user_name}">
+              <div>
+                <h6 class="mb-0 fw-bold">${rating.user_name}</h6>
+                <div class="rating-stars small">
+                  ${'<i class="fas fa-star text-warning"></i>'.repeat(rating.rating)}
+                  ${'<i class="far fa-star text-warning"></i>'.repeat(5 - rating.rating)}
+                </div>
+              </div>
+            </div>
+            <small class="text-muted">
+              ${new Date(rating.created_at).toLocaleDateString()}
+              ${rating.created_at !== rating.updated_at ? '<span class="text-muted small">(edited)</span>' : ''}
+            </small>
+          </div>
+          ${rating.comment ? `<p class="mb-0 mt-2">${rating.comment}</p>` : ''}
+        </div>
+      `;
+      container.appendChild(ratingEl);
+    });
+  }
+
+  // Thumbnail click handler
+  document.querySelectorAll('.thumbnail-item').forEach(item => {
+    item.addEventListener('click', function(e) {
+      e.preventDefault();
+      document.querySelectorAll('.thumbnail-item').forEach(i => i.classList.remove('active'));
+      this.classList.add('active');
     });
   });
 
-async function loadRatings(productId) {
-  try {
-    const response = await fetch(`/api/ratings/${productId}`);
-    const data = await response.json();
-    
-    updateRatingDisplay(data.average, data.count);
-    renderRatings(data.ratings);
-  } catch (error) {
-    console.error('Error loading ratings:', error);
-  }
-}
-
-function updateRatingDisplay(average, count) {
-  document.getElementById('averageRating').textContent = average;
-  document.getElementById('ratingCount').textContent = `(${count} review${count !== 1 ? 's' : ''})`;
-  
-  // Update star display
-  const starsContainer = document.getElementById('averageStars');
-  starsContainer.innerHTML = '';
-  
-  const fullStars = Math.floor(average);
-  const hasHalfStar = average % 1 >= 0.5;
-  
-  for (let i = 0; i < 5; i++) {
-    const star = document.createElement('span');
-    if (i < fullStars) {
-      star.innerHTML = '★';
-      star.className = 'text-warning';
-    } else if (i === fullStars && hasHalfStar) {
-      star.innerHTML = '½';
-      star.className = 'text-warning';
-    } else {
-      star.innerHTML = '☆';
-      star.className = 'text-muted';
-    }
-    starsContainer.appendChild(star);
-  }
-}
-
-function renderRatings(ratings) {
-  const container = document.getElementById('ratingsList');
-  container.innerHTML = '';
-  
-  if (ratings.length === 0) {
-    container.innerHTML = '<div class="alert alert-info">No ratings yet</div>';
-    return;
-  }
-  
-  ratings.forEach(rating => {
-    const ratingEl = document.createElement('div');
-    ratingEl.className = 'card mb-3 p-3';
-    
-    ratingEl.innerHTML = `
-      <div class="d-flex justify-content-between mb-2">
-        <div>
-          <strong>${rating.user_name}</strong>
-          <div class="rating-stars">
-            ${'★'.repeat(rating.rating)}${'☆'.repeat(5 - rating.rating)}
-          </div>
-        </div>
-        <small class="text-muted">
-          ${new Date(rating.created_at).toLocaleDateString()}
-          ${rating.created_at !== rating.updated_at ? '(edited)' : ''}
-        </small>
-      </div>
-      ${rating.comment ? `<p>${rating.comment}</p>` : ''}
-    `;
-    
-    container.appendChild(ratingEl);
+  // Product image hover effect
+  document.querySelectorAll('.product-image').forEach(img => {
+    img.addEventListener('mouseenter', function() {
+      this.style.transform = 'scale(1.03)';
+      this.style.transition = 'transform 0.3s ease';
+    });
+    img.addEventListener('mouseleave', function() {
+      this.style.transform = 'scale(1)';
+    });
   });
-}
-
 </script>
 
-<!-- Chat Style -->
 <style>
-  .chat-container {
-    height: 400px;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .chat-messages {
-    flex: 1;
-    overflow-y: auto;
+  /* Main Styles */
+  body {
     background-color: #f8f9fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   }
-
-  .chat-product-img {
-    width: 50px;
-    height: 50px;
+  
+  /* Product Image */
+  .product-main-image {
+    height: 400px;
+    object-fit: contain;
+    transition: transform 0.3s ease;
+  }
+  
+  .thumbnail-item {
+    transition: all 0.3s ease;
+    border: 2px solid transparent;
+  }
+  
+  .thumbnail-item:hover, .thumbnail-item.active {
+    border-color: #0d6efd;
+  }
+  
+  .thumbnail-item img {
+    height: 80px;
     object-fit: cover;
   }
-
+  
+  /* Product Card */
+  .product-card {
+    transition: all 0.3s ease;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  
+  .product-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.1) !important;
+  }
+  
+  /* Rating Stars */
+  .rating-stars {
+    color: #ffc107;
+    letter-spacing: 2px;
+  }
+  
+  .rating-input label {
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  
+  .rating-input input:not(:checked) ~ label:hover,
+  .rating-input input:not(:checked) ~ label:hover ~ label {
+    color: #ffc107;
+  }
+  
+  .rating-input input:checked ~ label {
+    color: #ffc107;
+  }
+  
+  /* Chat Styles */
+  .chat-messages {
+    background-color: #f8f9fa;
+    background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M11 18c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm48 25c3.866 0 7-3.134 7-7s-3.134-7-7-7-7 3.134-7 7 3.134 7 7 7zm-43-7c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm63 31c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM34 90c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zm56-76c1.657 0 3-1.343 3-3s-1.343-3-3-3-3 1.343-3 3 1.343 3 3 3zM12 86c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm28-65c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm23-11c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-6 60c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm29 22c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zM32 63c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm57-13c2.76 0 5-2.24 5-5s-2.24-5-5-5-5 2.24-5 5 2.24 5 5 5zm-9-21c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM60 91c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM35 41c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2zM12 60c1.105 0 2-.895 2-2s-.895-2-2-2-2 .895-2 2 .895 2 2 2z' fill='%239C92AC' fill-opacity='0.05' fill-rule='evenodd'/%3E%3C/svg%3E");
+  }
+  
+  .message-content {
+    max-width: 70%;
+    position: relative;
+  }
+  
+  .message-content:after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border: 10px solid transparent;
+  }
+  
+  .received .message-content:after {
+    left: -10px;
+    border-right-color: #f8f9fa;
+    border-left: 0;
+  }
+  
+  .sent .message-content:after {
+    right: -10px;
+    border-left-color: #0d6efd;
+    border-right: 0;
+  }
+  
+  /* Responsive adjustments */
+  @media (max-width: 768px) {
+    .product-main-image {
+      height: 300px;
+    }
+    
+    .thumbnail-item img {
+      height: 60px;
+    }
+  }
+  
+  @media (max-width: 576px) {
+    .product-main-image {
+      height: 250px;
+    }
+    
+    .thumbnail-item img {
+      height: 50px;
+    }
+    
+    .chat-container {
+      height: 400px;
+    }
+  }
+  
+  /* Animation for new messages */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  
   .message {
-    margin-bottom: 15px;
-    max-width: 80%;
+    animation: fadeIn 0.3s ease-out;
   }
-
-  .message.sent {
-    margin-left: auto;
-  }
-
-  .message.sent .message-content {
-    background-color: #007bff;
-    color: white;
-    border-radius: 18px 18px 0 18px;
-    padding: 8px 12px;
-  }
-
-  .message.received .message-content {
-    background-color: white;
-    border: 1px solid #dee2e6;
-    border-radius: 18px 18px 18px 0;
-    padding: 8px 12px;
-  }
-
-  .sender-name {
-    font-weight: bold;
-    font-size: 0.8rem;
-    margin-bottom: 2px;
-  }
-
-  .message-time {
-    font-size: 0.7rem;
-    text-align: right;
-    opacity: 0.7;
-    margin-top: 3px;
-  }
-  /* Rating System Styles */
-.rating-input {
-  display: flex;
-  flex-direction: row-reverse;
-  justify-content: flex-end;
-}
-
-.rating-input input {
-  display: none;
-}
-
-.rating-input label {
-  color: #ddd;
-  font-size: 2rem;
-  padding: 0 0.1em;
-  cursor: pointer;
-  transition: color 0.2s;
-}
-
-.rating-input input:checked ~ label,
-.rating-input input:checked ~ label ~ label {
-  color: #ffc107;
-}
-
-.rating-input input:not(:checked) ~ label:hover,
-.rating-input input:not(:checked) ~ label:hover ~ label {
-  color: #ffdb70;
-}
-
-.rating-stars {
-  color: #ffc107;
-  font-size: 1.2rem;
-  letter-spacing: 0.1em;
-}
-
-.rating-stars .text-muted {
-  color: #ddd !important;
-}
 </style>
 
 <%- include('../partials/footer') %>
