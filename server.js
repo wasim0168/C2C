@@ -14,9 +14,10 @@ const http = require('http');
 const { Server } = require('socket.io');
 const categoryUpload = multer({ dest: 'public/uploads/categories/' });
 const cookieParser = require('cookie-parser');
-const csrf = require('csurf');
+const authRoutes = require("./routes/auth");
 // Initialize Razorpay
-
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET
@@ -24,13 +25,10 @@ const razorpay = new Razorpay({
 
 // Database connection
 const db = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'olx_clone',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
+  host: 'localhost',
+  user: 'root',
+  password: '02769500',
+  database: 'olx_clone'
 });
 
 // chat server
@@ -107,15 +105,9 @@ app.use(session({
 
 // After session middleware
 app.use(cookieParser());
-app.use(csrf({ cookie: true }));
-const csrfProtection = csrf({ cookie: true });
 // app.use(csrfProtection);
 
 // Make CSRF token available to all views
-app.use((req, res, next) => {
-  res.locals.csrfToken = req.csrfToken();
-  next();
-});
 // block access to admin routes for non-admin users
 
 const checkBlocked = (req, res, next) => {
@@ -134,6 +126,7 @@ app.use(express.static("public"));
 // Static files
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(path.join(__dirname, 'public', 'uploads')));
+app.use("/auth", authRoutes);
 // Set view engine
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'ejs');
@@ -255,27 +248,32 @@ app.use((err, req, res, next) => {
 // Home page with pagination
 app.get('/', async (req, res) => {
   try {
+
     const page = parseInt(req.query.page) || 1;
-    const limit = 8; // 9 products per page
+    const limit = 8;
     const offset = (page - 1) * limit;
 
-    // Get total count of products
+    // ✅ Count only approved products
     const [countResult] = await db.query(
-      'SELECT COUNT(*) as total FROM products WHERE is_active = TRUE'
-    );
+`SELECT COUNT(*) as total 
+ FROM products 
+ WHERE is_active = TRUE AND is_approved = TRUE`
+);
+
     const totalProducts = countResult[0].total;
     const totalPages = Math.ceil(totalProducts / limit);
 
-    // Get paginated products
+    // ✅ Fetch only approved products
     const [products] = await db.query(`
-      SELECT p.*, u.name as user_name 
-      FROM products p
-      JOIN users u ON p.user_id = u.id
-      WHERE p.is_active = TRUE
-      ORDER BY p.created_at DESC
-      LIMIT ? OFFSET ?
-    `, [limit, offset]);
-    
+SELECT p.*, u.name as user_name
+FROM products p
+JOIN users u ON p.user_id = u.id
+WHERE p.is_active = TRUE 
+AND p.is_approved = TRUE
+ORDER BY p.created_at DESC
+LIMIT ? OFFSET ?
+`, [limit, offset]);
+
     res.render('home', { 
       user: req.session.user || null,
       products: products || [],
@@ -290,6 +288,7 @@ app.get('/', async (req, res) => {
         totalProducts
       }
     });
+
   } catch (error) {
     console.error(error);
     res.status(500).send('Server error');
@@ -388,8 +387,7 @@ app.get('/products/create', isAuthenticated, async (req, res) => {
     res.render('products/create', {
     user: req.session.user,
     categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
-    message : null,
-    csrfToken: req.csrfToken() // Explicitly pass CSRF token
+    message : null, // Explicitly pass CSRF token
   });
 
     delete req.session.message;
@@ -429,7 +427,7 @@ const getSimilarProducts = async (category, excludeProductId) => {
   }
 }
 
-app.get('/products/:id', validateProductId, csrfProtection , async (req, res) => {
+app.get('/products/:id', validateProductId, async (req, res) => {
   try {
     const [products] = await db.query(`
       SELECT p.*, u.name as user_name, u.email as user_email, u.phone as user_phone
@@ -471,13 +469,12 @@ app.get('/products/:id/edit',
   isAuthenticated, 
   validateProductId, 
   validateProductOwner, 
-  csrfProtection ,
   async (req, res) => {
     res.render('products/edit', { 
       user: req.session.user,
       product: req.product,
       categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
-      csrfToken: req.csrfToken() // Explicitly pass CSRF token
+    // Explicitly pass CSRF token
       // csrfToken: req.csrfToken() // Explicitly pass CSRF token
 
     });
@@ -488,7 +485,7 @@ app.post('/products/:id/update',
   isAuthenticated, 
   validateProductId, 
   validateProductOwner, 
-  csrfProtection , 
+
   upload.single('image'), 
   async (req, res) => {
     const { title, description, price, category } = req.body;
@@ -586,7 +583,7 @@ app.get('/admin/logout', (req, res) => {
 });
 
 // Login page
-app.get('/auth/login', csrfProtection , (req, res) => {
+app.get('/auth/login', (req, res) => {
   if (req.session.user) {
     return res.redirect('/');
   }
@@ -594,7 +591,7 @@ app.get('/auth/login', csrfProtection , (req, res) => {
 });
 
 // Login handler
-app.post('/auth/login', csrfProtection , async (req, res) => {
+app.post('/auth/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
@@ -632,7 +629,7 @@ app.post('/auth/login', csrfProtection , async (req, res) => {
 });
 
 // Register page
-app.get('/auth/register', csrfProtection , (req, res) => {
+app.get('/auth/register',  (req, res) => {
   if (req.session.user) {
     return res.redirect('/');
   }
@@ -641,7 +638,7 @@ app.get('/auth/register', csrfProtection , (req, res) => {
 
 // chat message
 // Add this route to your app.js
-app.get('/api/messages', isAuthenticated, csrfProtection , async (req, res) => {
+app.get('/api/messages', isAuthenticated, async (req, res) => {
   try {
     const { productId, otherUserId } = req.query;
     const currentUserId = req.session.user.id;
@@ -665,7 +662,7 @@ app.get('/api/messages', isAuthenticated, csrfProtection , async (req, res) => {
 });
 // inbox message
 // Get all conversations for the current user
-app.get('/messages', isAuthenticated, csrfProtection , async (req, res) => {
+app.get('/messages', isAuthenticated,  async (req, res) => {
   try {
     const userId = req.session.user.id;
     
@@ -717,7 +714,7 @@ app.get('/messages', isAuthenticated, csrfProtection , async (req, res) => {
 });
 
 // Mark messages as read
-app.post('/messages/mark-as-read', isAuthenticated, csrfProtection , async (req, res) => {
+app.post('/messages/mark-as-read', isAuthenticated, async (req, res) => {
   try {
     const { productId, senderId } = req.body;
     await db.query(
@@ -732,7 +729,7 @@ app.post('/messages/mark-as-read', isAuthenticated, csrfProtection , async (req,
 });
 
 // Get specific conversation
-app.get('/messages/:productId/:userId', isAuthenticated, csrfProtection , async (req, res) => {
+app.get('/messages/:productId/:userId', isAuthenticated, async (req, res) => {
   try {
     const { productId, userId } = req.params;
     const currentUserId = req.session.user.id;
@@ -786,7 +783,7 @@ app.get('/messages/:productId/:userId', isAuthenticated, csrfProtection , async 
 });
 
 // Register handler
-app.post('/auth/register', csrfProtection , async (req, res) => {
+app.post('/auth/register',  async (req, res) => {
   const { name, email, password, confirm_password } = req.body;
 
   if (password !== confirm_password) {
@@ -815,7 +812,7 @@ app.post('/auth/register', csrfProtection , async (req, res) => {
 });
 
 // Logout
-app.get('/auth/logout',  csrfProtection ,(req, res) => {
+app.get('/auth/logout', (req, res) => {
   req.session.destroy();
   res.redirect('/');
 });
@@ -823,34 +820,68 @@ app.get('/auth/logout',  csrfProtection ,(req, res) => {
 
 app.get('/profile', isAuthenticated, async (req, res) => {
   try {
+
     const userId = req.session.user.id;
-    const [products] = await db.query('SELECT * FROM products WHERE user_id = ? ORDER BY created_at DESC', [userId]);
+
+    // Get all products
+    const [products] = await db.query(`
+      SELECT *
+      FROM products
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+    `, [userId]);
+
+    // ✅ Split correctly using is_approved column
+    const approvedProducts = products.filter(p => p.is_approved === 1);
+    const pendingProducts = products.filter(p => p.is_approved === 0);
+
+    // Get plans
     const [plans] = await db.query('SELECT * FROM plans');
-    const [unreadResult] = await db.query('SELECT COUNT(*) as unreadCount FROM messages WHERE receiver_id = ? AND is_read = FALSE', [userId]);
+
+    // Get unread messages
+    const [unreadResult] = await db.query(
+      `SELECT COUNT(*) as unreadCount 
+       FROM messages 
+       WHERE receiver_id = ? AND is_read = FALSE`,
+      [userId]
+    );
+
+    // Get current plan
+    const userPlan = plans.find(p => p.id === req.session.user.plan_id);
+
+    // Product limit from plan
+    const productLimit = userPlan ? userPlan.max_products : 0;
+
+    // Remaining slots
+    const remainingSlots = productLimit - approvedProducts.length;
 
     res.render('profile', {
       user: req.session.user,
-      products,
+      approvedProducts,
+      pendingProducts,
+      productLimit,
+      remainingSlots,
       plans,
       unreadCount: unreadResult[0].unreadCount || 0,
-      message: req.session.message,
-      csrfToken: req.csrfToken() // This is good
+      message: req.session.message || null
     });
 
     delete req.session.message;
+
   } catch (error) {
+
     console.error('Profile error:', error);
+
     res.status(500).render('error', {
       user: req.session.user,
       status: 500,
       message: 'Error loading profile'
-
     });
+
   }
 });
-
 // Plan Selection
-app.get('/plans/select', isAuthenticated, csrfProtection , (req, res) => {
+app.get('/plans/select', isAuthenticated, (req, res) => {
   if (req.session.user.plan_id) {
     return res.redirect('/profile');
   }
@@ -864,11 +895,100 @@ app.get('/plans/select', isAuthenticated, csrfProtection , (req, res) => {
       res.status(500).send('Server error');
     });
 });
+app.post('/plans/validate-change', isAuthenticated, async (req, res) => {
+  try {
 
+    console.log("BODY:", req.body);
+    console.log("SESSION:", req.session.user);
+
+    const userId = req.session.user?.id;
+    const { plan_id } = req.body;
+
+    if (!plan_id) {
+      return res.json({
+        valid: false,
+        message: "Plan ID missing"
+      });
+    }
+
+    const [user] = await db.query(
+  "SELECT plan_id FROM users WHERE id = ?",
+  [userId]
+);
+
+    console.log("DB RESULT:", user);
+
+    if (!user.length) {
+      return res.json({
+        valid: false,
+        message: "User not found"
+      });
+    }
+
+    if (user[0].plan_id == plan_id) {
+      return res.json({
+        valid: false,
+        message: "You already have this plan"
+      });
+    }
+
+    return res.json({
+      valid: true
+    });
+
+  } catch (err) {
+
+    console.log("ERROR:", err);
+
+    return res.json({
+      valid: false,
+      message: err.message
+    });
+  }
+});
+app.post('/plans/update', isAuthenticated, async (req, res) => {
+  try {
+
+    console.log("UPDATE BODY:", req.body);
+
+    const userId = req.session.user.id;
+    const { plan_id } = req.body;
+
+    if (!plan_id) {
+      return res.json({
+        success: false,
+        message: "Plan ID missing"
+      });
+    }
+
+    // 🔧 IMPORTANT FIX HERE (use db not pool)
+    await db.query(
+      "UPDATE users SET plan_id = ? WHERE id = ?",
+      [plan_id, userId]
+    );
+
+    // update session also
+    req.session.user.plan_id = plan_id;
+
+    return res.json({
+      success: true,
+      message: "Plan updated successfully"
+    });
+
+  } catch (err) {
+
+    console.log("UPDATE ERROR:", err);
+
+    return res.json({
+      success: false,
+      message: err.message
+    });
+  }
+});
 // Razorpay Integration
 
 // Create Razorpay order
-app.post('/create-razorpay-order', isAuthenticated, csrfProtection , async (req, res) => {
+app.post('/create-razorpay-order', isAuthenticated, async (req, res) => {
   const { plan_id } = req.body;
 
   try {
@@ -912,14 +1032,23 @@ app.post('/create-razorpay-order', isAuthenticated, csrfProtection , async (req,
 });
 
 // Verify payment and update plan
-app.post('/verify-payment', isAuthenticated, csrfProtection , async (req, res) => {
+app.post('/verify-payment', isAuthenticated, async (req, res) => {
   try {
-    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, plan_id } = req.body;
+
+    const {
+      razorpay_payment_id,
+      razorpay_order_id,
+      razorpay_signature,
+      plan_id
+    } = req.body;
+
+    // ✅ ADD THIS LINE HERE
+    const userId = req.session.user.id;
 
     if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature || !plan_id) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing payment verification fields' 
+      return res.status(400).json({
+        success: false,
+        message: 'Missing payment verification fields'
       });
     }
 
@@ -928,36 +1057,55 @@ app.post('/verify-payment', isAuthenticated, csrfProtection , async (req, res) =
     const generated_signature = hmac.digest('hex');
 
     if (generated_signature !== razorpay_signature) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Payment verification failed - invalid signature' 
+      return res.status(400).json({
+        success: false,
+        message: 'Payment verification failed - invalid signature'
       });
     }
 
-    const [plans] = await db.query('SELECT * FROM plans WHERE id = ?', [plan_id]);
+    const [plans] = await db.query(
+      'SELECT * FROM plans WHERE id = ?',
+      [plan_id]
+    );
+
     if (plans.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid plan selected' 
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid plan selected'
       });
     }
 
     const plan = plans[0];
-    
+
+    // ✅ update user plan
     await db.query(
       'UPDATE users SET plan_id = ?, product_limit = ? WHERE id = ?',
-      [plan.id, plan.max_products, req.session.user.id]
+      [plan.id, plan.max_products, userId]
     );
 
+    // ❗ amount missing earlier — fix here
+    const amount = plan.price;
+
+    // ✅ insert payment record
     await db.query(
-      'INSERT INTO payments (user_id, plan_id, amount, razorpay_payment_id, razorpay_order_id) VALUES (?, ?, ?, ?, ?)',
-      [req.session.user.id, plan.id, plan.price, razorpay_payment_id, razorpay_order_id]
+      `INSERT INTO payments
+       (user_id, plan_id, amount, razorpay_payment_id, razorpay_order_id, razorpay_signature)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        plan_id,
+        amount,
+        razorpay_payment_id,
+        razorpay_order_id,
+        razorpay_signature
+      ]
     );
 
+    // ✅ update session
     req.session.user.plan_id = plan.id;
     req.session.user.product_limit = plan.max_products;
 
-    return res.json({ 
+    return res.json({
       success: true,
       plan_name: plan.name,
       product_limit: plan.max_products,
@@ -965,19 +1113,21 @@ app.post('/verify-payment', isAuthenticated, csrfProtection , async (req, res) =
     });
 
   } catch (error) {
+
     console.error('Payment verification error:', error);
-    return res.status(500).json({ 
-      success: false, 
+
+    return res.status(500).json({
+      success: false,
       message: 'Internal server error during payment verification'
     });
+
   }
 });
-
 // Product Management
 
 
 // Add this with your other routes
-app.get('/users/:id/phone', isAuthenticated, csrfProtection , async (req, res) => {
+app.get('/users/:id/phone', isAuthenticated, async (req, res) => {
   try {
     const [users] = await db.query(
       'SELECT phone FROM users WHERE id = ?',
@@ -995,43 +1145,93 @@ app.get('/users/:id/phone', isAuthenticated, csrfProtection , async (req, res) =
   }
 });
 
-app.post('/products/create', isAuthenticated, csrfProtection, upload.single('image'), async (req, res) => {
+app.post('/products/create', isAuthenticated, upload.array('images', 3), async (req, res) => {
   try {
-    if (!req.session.user.plan_id) {
-      req.session.message = { type: 'danger', text: 'Please select a plan before posting products' };
+
+    const user = req.session.user;
+
+    if (!user.plan_id) {
+      req.session.message = {
+        type: 'danger',
+        text: 'Please select a plan before posting products'
+      };
       return res.redirect('/plans/select');
     }
 
-    const [count] = await db.query(
-      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
-      [req.session.user.id]
+    // get latest product_limit
+    const [userData] = await db.query(
+      'SELECT product_limit FROM users WHERE id = ?',
+      [user.id]
     );
 
-    if (count[0].count >= req.session.user.product_limit) {
+    const productLimit = userData[0]?.product_limit || 0;
+
+    const [count] = await db.query(
+      'SELECT COUNT(*) as count FROM products WHERE user_id = ?',
+      [user.id]
+    );
+
+    if (count[0].count >= productLimit) {
       req.session.message = {
         type: 'warning',
-        text: `You've reached your limit of ${req.session.user.product_limit} products. Please upgrade your plan.`
+        text: `You've reached your limit of ${productLimit} products. Please upgrade your plan.`
       };
       return res.redirect('/profile');
     }
 
     const { title, description, price, category } = req.body;
-    if (!title || !description || !price || !category || !req.file) {
-      req.session.message = { type: 'danger', text: 'All fields are required' };
+
+    if (!title || !description || !price || !category) {
+      req.session.message = {
+        type: 'danger',
+        text: 'All fields are required'
+      };
       return res.redirect('/products/create');
     }
 
-    await db.query(
-      'INSERT INTO products (user_id, title, description, price, image, category) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.session.user.id, title, description, parseFloat(price), req.file.filename, category]
-    );
+    // ✅ check images uploaded
+    if (!req.files || req.files.length === 0) {
+      req.session.message = {
+        type: 'danger',
+        text: 'At least one product image required'
+      };
+      return res.redirect('/products/create');
+    }
 
-    req.session.message = { type: 'success', text: 'Product posted successfully!' };
+    // store filenames
+    const imageNames = req.files.map(file => file.filename).join(',');
+
+    await db.query(
+`INSERT INTO products 
+(user_id, title, description, price, image, category, is_approved, is_active)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+[
+user.id,
+title,
+description,
+parseFloat(price),
+imageNames,
+category,
+false,
+false
+]
+);
+    req.session.message = {
+      type: 'success',
+      text: 'Product posted successfully!'
+    };
+
     return res.redirect('/profile');
 
   } catch (error) {
+
     console.error('Product creation error:', error);
-    req.session.message = { type: 'danger', text: 'Error creating product. Please try again.' };
+
+    req.session.message = {
+      type: 'danger',
+      text: 'Error creating product. Please try again.'
+    };
+
     return res.redirect('/products/create');
   }
 });
@@ -1040,14 +1240,13 @@ app.get('/products/:id/edit',
   isAuthenticated, 
   validateProductId, 
   validateProductOwner, 
-  csrfProtection,
   async (req, res) => {
-    console.log('CSRF Token:', req.csrfToken()); // Debug line
+   // Debug line
     res.render('products/edit', { 
       user: req.session.user,
       product: req.product,
       categories: ['Electronics', 'Furniture', 'Cars', 'Bikes', 'Fashion', 'Books', 'Others'],
-      csrfToken: req.csrfToken()
+      
     });
 });
 
@@ -1058,7 +1257,6 @@ app.post('/products/:id/update',
   validateProductId, 
   validateProductOwner, 
   upload.single('image'), 
-  csrfProtection, 
   async (req, res) => {
     const { title, description, price, category } = req.body;
 
@@ -1101,8 +1299,7 @@ app.post(
   '/products/:id/delete',
   isAuthenticated,
   validateProductId,
-  validateProductOwner,
-  csrfProtection, // Must be AFTER body parsing and session middleware
+  validateProductOwner, // Must be AFTER body parsing and session middleware
   async (req, res) => {
     try {
       const imagePath = path.join(__dirname, 'public', 'uploads', req.product.image);
@@ -1131,7 +1328,7 @@ app.post(
 // Admin Routes
 
 // Admin dashboard
-app.get('/admin/dashboard', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/dashboard', isAdmin, async (req, res) => {
   try {
     // Get basic counts with fallbacks
     const getCount = async (query, fallback = 0) => {
@@ -1205,7 +1402,7 @@ app.get('/admin/dashboard', isAdmin, csrfProtection , async (req, res) => {
 
 // Admin - List users
 // List Users
-app.get('/admin/users', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/users', isAdmin, async (req, res) => {
   try {
     const [users] = await db.query(`
       SELECT u.*, COUNT(p.id) as product_count 
@@ -1230,7 +1427,7 @@ app.get('/admin/users', isAdmin, csrfProtection , async (req, res) => {
   }
 });
 // Block/Unblock User
-app.post('/admin/users/:id/toggle-status', csrfProtection, isAdmin, async (req, res) => {
+app.post('/admin/users/:id/toggle-status', isAdmin, async (req, res) => {
   try {
     await db.query(
       'UPDATE users SET is_active = NOT is_active WHERE id = ?',
@@ -1294,7 +1491,7 @@ app.get('/admin/users/:id/products', isAdmin, async (req, res) => {
 
 // Approve/Reject Product
 // Approve product
-app.post('/admin/products/:id/approve', isAdmin, csrfProtection , async (req, res) => {
+app.post('/admin/products/:id/approve', isAdmin, async (req, res) => {
   try {
     await db.query(
       'UPDATE products SET is_approved = TRUE, is_active = TRUE WHERE id = ?',
@@ -1308,7 +1505,7 @@ app.post('/admin/products/:id/approve', isAdmin, csrfProtection , async (req, re
 });
 
 // Reject product
-app.post('/admin/products/:id/reject', isAdmin, csrfProtection , async (req, res) => {
+app.post('/admin/products/:id/reject', isAdmin, async (req, res) => {
   try {
     await db.query(
       'UPDATE products SET is_approved = FALSE, is_active = FALSE WHERE id = ?',
@@ -1323,7 +1520,7 @@ app.post('/admin/products/:id/reject', isAdmin, csrfProtection , async (req, res
 
 // Pending Products
 // Admin product approval routes
-app.get('/admin/products/pending', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/products/pending', isAdmin, async (req, res) => {
   try {
     const [products] = await db.query(`
       SELECT p.*, u.name as user_name, u.email as user_email
@@ -1349,7 +1546,7 @@ app.get('/admin/products/pending', isAdmin, csrfProtection , async (req, res) =>
 });
 
 // Flagged Products
-app.get('/admin/products/flagged', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/products/flagged', isAdmin, async (req, res) => {
   try {
     const [products] = await db.query(`
       SELECT p.*, u.name as user_name, COUNT(r.id) as report_count
@@ -1371,7 +1568,7 @@ app.get('/admin/products/flagged', isAdmin, csrfProtection , async (req, res) =>
     res.status(500).render('admin/error', { admin: req.session.admin });
   }
 });
-app.get('/admin/reports', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/reports', isAdmin, async (req, res) => {
   try {
     const [reports] = await db.query(`
       SELECT r.*, p.title as product_title, u.name as reporter_name
@@ -1392,7 +1589,7 @@ app.get('/admin/reports', isAdmin, csrfProtection , async (req, res) => {
   }
 });
 
-app.post('/admin/reports/:id/resolve', isAdmin, csrfProtection , async (req, res) => {
+app.post('/admin/reports/:id/resolve', isAdmin, async (req, res) => {
   try {
     const { action } = req.body;
     
@@ -1414,7 +1611,7 @@ app.post('/admin/reports/:id/resolve', isAdmin, csrfProtection , async (req, res
     res.status(500).render('admin/error', { admin: req.session.admin });
   }
 });
-app.get('/admin/transactions', isAdmin, csrfProtection, async (req, res) => {
+app.get('/admin/transactions', isAdmin, async (req, res) => {
   try {
     const [transactions] = await db.query(`
       SELECT t.*, 
@@ -1443,7 +1640,7 @@ app.get('/admin/transactions', isAdmin, csrfProtection, async (req, res) => {
     res.status(500).render('admin/error', { admin: req.session.admin });
   }
 });
-app.get('/admin/feedback', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/feedback', isAdmin, async (req, res) => {
   try {
     const [feedback] = await db.query(`
       SELECT f.*, 
@@ -1467,7 +1664,7 @@ app.get('/admin/feedback', isAdmin, csrfProtection , async (req, res) => {
   }
 });
 
-app.post('/admin/feedback/:id/block', isAdmin, csrfProtection , async (req, res) => {
+app.post('/admin/feedback/:id/block', isAdmin, async (req, res) => {
   try {
     await db.query(
       'UPDATE feedback SET is_blocked = TRUE WHERE id = ?',
@@ -1482,7 +1679,7 @@ app.post('/admin/feedback/:id/block', isAdmin, csrfProtection , async (req, res)
 });
 // block user
 // Block user
-app.post('/admin/users/:id/block', isAdmin, csrfProtection , async (req, res) => {
+app.post('/admin/users/:id/block', isAdmin, async (req, res) => {
   try {
     const { reason } = req.body;
     
@@ -1511,7 +1708,7 @@ app.post('/admin/users/:id/block', isAdmin, csrfProtection , async (req, res) =>
 });
 
 // Unblock user
-app.post('/admin/users/:id/unblock', isAdmin, csrfProtection , async (req, res) => {
+app.post('/admin/users/:id/unblock', isAdmin, async (req, res) => {
   try {
     await db.query(
       'UPDATE users SET is_blocked = FALSE, blocked_reason = NULL, blocked_at = NULL WHERE id = ?',
@@ -1540,7 +1737,7 @@ async function destroyUserSessions(userId) {
   // This depends on your session store (Redis, database, etc.)
 }
 
-app.get('/admin/categories', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/categories', isAdmin, async (req, res) => {
   try {
     const [categories] = await db.query(`
       SELECT c.*, 
@@ -1563,7 +1760,7 @@ app.get('/admin/categories', isAdmin, csrfProtection , async (req, res) => {
   }
 });
 
-app.post('/admin/categories', isAdmin, csrfProtection , categoryUpload.single('image'), async (req, res) => {
+app.post('/admin/categories', isAdmin, categoryUpload.single('image'), async (req, res) => {
   try {
     const { name, parent_id } = req.body;
     
@@ -1594,7 +1791,7 @@ app.get('/admin/settings', isAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/settings/change-password', isAdmin, csrfProtection , async (req, res) => {
+app.post('/admin/settings/change-password', isAdmin, async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
     
@@ -1626,7 +1823,7 @@ app.post('/admin/settings/change-password', isAdmin, csrfProtection , async (req
     res.status(500).render('admin/error', { admin: req.session.admin });
   }
 });
-app.get('/admin/tickets', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/tickets', isAdmin, async (req, res) => {
   try {
     const [tickets] = await db.query(`
       SELECT t.*, u.name as user_name
@@ -1646,7 +1843,7 @@ app.get('/admin/tickets', isAdmin, csrfProtection , async (req, res) => {
   }
 });
 
-app.post('/admin/tickets/:id/reply', isAdmin, csrfProtection , async (req, res) => {
+app.post('/admin/tickets/:id/reply', isAdmin, async (req, res) => {
   try {
     const { reply } = req.body;
     
@@ -1662,7 +1859,7 @@ app.post('/admin/tickets/:id/reply', isAdmin, csrfProtection , async (req, res) 
   }
 });
 // Admin - List products
-app.get('/admin/products', isAdmin, csrfProtection , async (req, res) => {
+app.get('/admin/products', isAdmin, async (req, res) => {
   try {
     const [products] = await db.query(`
       SELECT p.*, u.name as user_name, u.email as user_email
@@ -1682,7 +1879,7 @@ app.get('/admin/products', isAdmin, csrfProtection , async (req, res) => {
 });
 
 // Admin - Toggle product status
-app.post('/admin/products/:id/toggle', isAdmin, validateProductId, csrfProtection , async (req, res) => {
+app.post('/admin/products/:id/toggle', isAdmin, validateProductId, async (req, res) => {
   try {
     await db.query(
       'UPDATE products SET is_active = NOT is_active WHERE id = ?',
@@ -1697,28 +1894,54 @@ app.post('/admin/products/:id/toggle', isAdmin, validateProductId, csrfProtectio
 });
 
 // Admin - Delete product
-app.post('/admin/products/:id/delete', isAdmin, validateProductId, csrfProtection , async (req, res) => {
+app.post('/admin/products/:id/delete', isAdmin, validateProductId, async (req, res) => {
   try {
-    const [products] = await db.query('SELECT * FROM products WHERE id = ?', [req.productId]);
-    
+
+    const productId = req.productId;
+
+    const [products] = await db.query(
+      'SELECT * FROM products WHERE id = ?',
+      [productId]
+    );
+
     if (products.length > 0) {
-      const imagePath = path.join(__dirname, 'public', 'uploads', products[0].image);
+
+      const imagePath = path.join(
+        __dirname,
+        'public',
+        'uploads',
+        products[0].image
+      );
+
       if (fs.existsSync(imagePath)) {
         fs.unlinkSync(imagePath);
       }
     }
-    
-    await db.query('DELETE FROM products WHERE id = ?', [req.productId]);
-    
+
+    // delete related messages first
+    await db.query(
+      'DELETE FROM messages WHERE product_id = ?',
+      [productId]
+    );
+
+    // now delete product
+    await db.query(
+      'DELETE FROM products WHERE id = ?',
+      [productId]
+    );
+
     res.redirect('/admin/products');
+
   } catch (error) {
+
     console.error(error);
     res.status(500).send('Server error');
+
   }
 });
 
 // Admin Registration Routes
-app.get('/admin/register', csrfProtection , (req, res) => {
+app.get('/admin/register', (req, res) => {
   if (req.session.admin) return res.redirect('/admin/dashboard');
   res.render('admin/register', { 
     error: null,
@@ -1726,7 +1949,7 @@ app.get('/admin/register', csrfProtection , (req, res) => {
   });
 });
 
-app.post('/admin/register', csrfProtection , async (req, res) => {
+app.post('/admin/register', async (req, res) => {
   const { name, email, password, confirm_password, secret_key } = req.body;
   
   if (password !== confirm_password) {
@@ -1774,7 +1997,7 @@ app.post('/admin/register', csrfProtection , async (req, res) => {
 });
 
 // One-time setup route (remove after first use)
-app.get('/setup-first-admin', csrfProtection, async (req, res) => {
+app.get('/setup-first-admin', async (req, res) => {
   const [admins] = await db.query('SELECT id FROM admins');
   if (admins.length > 0) return res.send('Admin already exists');
   
@@ -1807,7 +2030,7 @@ app.use((err, req, res, next) => {
 
 // products rating
 // Add to your existing routes
-app.post('/api/ratings', isAuthenticated, csrfProtection , async (req, res) => {
+app.post('/api/ratings', isAuthenticated, async (req, res) => {
   try {
     const { productId, rating, comment } = req.body;
     const userId = req.session.user.id;
@@ -1866,7 +2089,7 @@ app.post('/api/ratings', isAuthenticated, csrfProtection , async (req, res) => {
   }
 });
 
-app.get('/api/ratings/:productId', csrfProtection, async (req, res) => {
+app.get('/api/ratings/:productId', async (req, res) => {
   try {
     const { productId } = req.params;
 

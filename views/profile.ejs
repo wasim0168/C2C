@@ -261,7 +261,7 @@
                 <div class="col-sm-6 col-md-4">
                   <div class="card h-100 <%= !product.is_active ? 'inactive' : '' %>">
                     <div class="product-img-container">
-                      <img src="/uploads/<%= product.image %>" class="product-img" alt="<%= product.title %>">
+                      <img src="/uploads/<%= product.image.split(',')[0] %>" class="product-img">
                     </div>
                     <div class="card-body">
                       <h5 class="card-title text-truncate"><%= product.title %></h5>
@@ -309,7 +309,7 @@
                 <div class="col-sm-6 col-md-4">
                   <div class="card h-100 <%= !product.is_active ? 'inactive' : '' %>">
                     <div class="product-img-container">
-                      <img src="/uploads/<%= product.image %>" class="product-img" alt="<%= product.title %>">
+                      <img src="/uploads/<%= product.image.split(',')[0] %>" class="product-img">
                       <span class="status-badge badge bg-warning text-dark">
                         <i class="fas fa-hourglass-half me-1"></i> Pending
                       </span>

@@ -242,7 +242,7 @@
       <% products.forEach(product => { %>
         <div class="product-card">
           <div class="product-image-container">
-            <img src="/uploads/<%= product.image %>" class="product-image" alt="<%= product.title %>">
+           <img src="/uploads/<%= product.image.split(',')[0] %>" class="product-image">
           </div>
           <div class="product-body">
             <h5 class="product-title"><%= product.title %></h5>

@@ -1,105 +1,105 @@
-<%- include('../partials/header', { user: null }) %>
+  <%- include('../partials/header', { user: null }) %>
 
-<div class="row justify-content-center mt-5">
-  <div class="col-md-6">
-    <div class="card">
-      <div class="card-header">
-        <h4>Register</h4>
-      </div>
-      <div class="card-body">
-        <% if (error) { %>
-          <div class="alert alert-danger"><%= error %></div>
-        <% } %>
-        
-        <!-- Step 1: Email Verification Form (initially shown) -->
-        <form id="emailVerificationForm" action="/auth/send-otp" method="POST">
-          <div class="mb-3">
-            <label for="email" class="form-label">Email</label>
-            <input type="email" class="form-control" id="email" name="email" required>
-          </div>
-          <button type="submit" class="btn btn-primary">Send Verification Code</button>
-        </form>
-
-        <!-- Step 2: Registration Form (initially hidden) -->
-        <form id="registrationForm" action="/auth/register" method="POST" style="display: none;">
-          <input type="hidden" id="verifiedEmail" name="email">
+  <div class="row justify-content-center mt-5">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header">
+          <h4>Register</h4>
+        </div>
+        <div class="card-body">
+          <% if (error) { %>
+            <div class="alert alert-danger"><%= error %></div>
+          <% } %>
           
-          <div class="mb-3">
-            <label for="name" class="form-label">Full Name</label>
-            <input type="text" class="form-control" id="name" name="name" required>
-          </div>
-          
-          <div class="mb-3">
-            <label for="password" class="form-label">Password</label>
-            <input type="password" class="form-control" id="password" name="password" required>
-          </div>
-          
-          <div class="mb-3">
-            <label for="confirm_password" class="form-label">Confirm Password</label>
-            <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
-          </div>
-          
-          <div class="mb-3">
-            <label for="otp" class="form-label">Verification Code</label>
-            <div class="input-group">
-              <input type="text" class="form-control" id="otp" name="otp" required>
-              <button type="button" class="btn btn-outline-secondary" id="resendOtp">Resend</button>
+          <!-- Step 1: Email Verification Form (initially shown) -->
+          <form id="emailVerificationForm" action="/auth/send-otp" method="POST">
+            <div class="mb-3">
+              <label for="email" class="form-label">Email</label>
+              <input type="email" class="form-control" id="email" name="email" required>
             </div>
-            <small class="text-muted">Check your email for the verification code</small>
-          </div>
-          
-          <button type="submit" class="btn btn-primary">Complete Registration</button>
-        </form>
+            <button type="submit" class="btn btn-primary">Send Verification Code</button>
+          </form>
 
-        <p class="mt-3">Already have an account? <a href="/auth/login">Login here</a></p>
+          <!-- Step 2: Registration Form (initially hidden) -->
+          <form id="registrationForm" action="/auth/register" method="POST" style="display: none;">
+            <input type="hidden" id="verifiedEmail" name="email">
+            
+            <div class="mb-3">
+              <label for="name" class="form-label">Full Name</label>
+              <input type="text" class="form-control" id="name" name="name" required>
+            </div>
+            
+            <div class="mb-3">
+              <label for="password" class="form-label">Password</label>
+              <input type="password" class="form-control" id="password" name="password" required>
+            </div>
+            
+            <div class="mb-3">
+              <label for="confirm_password" class="form-label">Confirm Password</label>
+              <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
+            </div>
+            
+            <div class="mb-3">
+              <label for="otp" class="form-label">Verification Code</label>
+              <div class="input-group">
+                <input type="text" class="form-control" id="otp" name="otp" required>
+                <button type="button" class="btn btn-outline-secondary" id="resendOtp">Resend</button>
+              </div>
+              <small class="text-muted">Check your email for the verification code</small>
+            </div>
+            
+            <button type="submit" class="btn btn-primary">Complete Registration</button>
+          </form>
+
+          <p class="mt-3">Already have an account? <a href="/auth/login">Login here</a></p>
+        </div>
       </div>
     </div>
   </div>
-</div>
 
-<script>
-  // Handle the OTP sending response
-  document.getElementById('emailVerificationForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    
-    const email = document.getElementById('email').value;
-    const response = await fetch('/auth/send-otp', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ email })
-    });
-    
-    const result = await response.json();
-    
-    if (result.success) {
-      // Show registration form and hide email form
-      document.getElementById('emailVerificationForm').style.display = 'none';
-      document.getElementById('registrationForm').style.display = 'block';
-      document.getElementById('verifiedEmail').value = email;
+  <script>
+    // Handle the OTP sending response
+    document.getElementById('emailVerificationForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
       
-      // Set email field as readonly in case user goes back
-      document.getElementById('email').readOnly = true;
-    } else {
-      alert(result.message || 'Failed to send verification code');
-    }
-  });
-
-  // Handle OTP resend
-  document.getElementById('resendOtp').addEventListener('click', async function() {
-    const email = document.getElementById('verifiedEmail').value;
-    const response = await fetch('/auth/resend-otp', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ email })
+      const email = document.getElementById('email').value;
+      const response = await fetch('/auth/send-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email })
+      });
+      
+      const result = await response.json();
+      
+      if (result.success) {
+        // Show registration form and hide email form
+        document.getElementById('emailVerificationForm').style.display = 'none';
+        document.getElementById('registrationForm').style.display = 'block';
+        document.getElementById('verifiedEmail').value = email;
+        
+        // Set email field as readonly in case user goes back
+        document.getElementById('email').readOnly = true;
+      } else {
+        alert(result.message || 'Failed to send verification code');
+      }
     });
-    
-    const result = await response.json();
-    alert(result.message || (result.success ? 'New code sent!' : 'Failed to resend code'));
-  });
-</script>
 
-<%- include('../partials/footer') %>
+    // Handle OTP resend
+    document.getElementById('resendOtp').addEventListener('click', async function() {
+      const email = document.getElementById('verifiedEmail').value;
+      const response = await fetch('/auth/resend-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email })
+      });
+      
+      const result = await response.json();
+      alert(result.message || (result.success ? 'New code sent!' : 'Failed to resend code'));
+    });
+  </script>
+
+  <%- include('../partials/footer') %>
